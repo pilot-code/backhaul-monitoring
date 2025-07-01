@@ -78,7 +78,15 @@ ports = [
 \"$PORTS\"
 ]"
         else
-            TUNNEL_PORT=443
+            # WSSMUX
+            while true; do
+                read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
+                if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
+                    break
+                else
+                    echo "Faghat mituni 443 ya 8443 entekhab koni!"
+                fi
+            done
             read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
             PORTS=$(echo $PORTS_RAW | tr -d ' ' | sed 's/,/","/g')
 
@@ -116,8 +124,8 @@ ports = [
         fi
     else
         if [ "$TUNNEL_TYPE" = "tcp" ]; then
-            read -p "Tunnel port (ex: 3080): " TUNNEL_PORT
             read -p "Iran server IP: " IRAN_IP
+            read -p "Tunnel port (ex: 3080): " TUNNEL_PORT
             BACKHAUL_CONFIG="[client]
 remote_addr = \"$IRAN_IP:$TUNNEL_PORT\"
 transport = \"tcp\"
@@ -133,8 +141,15 @@ web_port = 2060
 sniffer_log = \"/root/backhaul.json\"
 log_level = \"info\""
         else
-            TUNNEL_PORT=443
             read -p "Iran server IP: " IRAN_IP
+            while true; do
+                read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
+                if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
+                    break
+                else
+                    echo "Faghat mituni 443 ya 8443 entekhab koni!"
+                fi
+            done
             BACKHAUL_CONFIG="[client]
 remote_addr = \"$IRAN_IP:$TUNNEL_PORT\"
 edge_ip = \"\"
@@ -236,4 +251,4 @@ echo "" > /var/log/backhaul_monitor.log
 echo "Setup completed. Monitoring will run every $MON_MIN minutes."
 tail -n 3 /var/log/backhaul_monitor.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza pilotcode"
+echo -e "\nDone\nThank you\nEdited by amirreza safari"
