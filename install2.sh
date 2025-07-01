@@ -21,6 +21,7 @@ if [ "$SRV_TYPE" != "monitor" ]; then
         aarch64|arm64) ARCH="arm64" ;;
         armv7l) ARCH="armv7" ;;
         i386|i686) ARCH="386" ;;
+        *) echo "Unsupported architecture!"; exit 1 ;;
     esac
     FILE_NAME="backhaul_${OS}_${ARCH}.tar.gz"
 
@@ -36,6 +37,7 @@ if [ "$SRV_TYPE" != "monitor" ]; then
             exit 1
         fi
     fi
+
     mkdir -p /root/backhaul
     if tar -xzf "$FILE_NAME" -C /root/backhaul; then
         rm -f "$FILE_NAME"
@@ -45,6 +47,7 @@ if [ "$SRV_TYPE" != "monitor" ]; then
         exit 1
     fi
 
+    # PROTOCOL SELECT
     echo "Kodam protocol ra mikhay?"
     select tunnel in "TCP (sade o sari')" "WSS Mux (zedd-filter & makhfi)"; do
       case $REPLY in
@@ -60,7 +63,7 @@ if [ "$SRV_TYPE" != "monitor" ]; then
         if [ "$TUNNEL_TYPE" = "tcp" ]; then
             read -p "Tunnel port (ex: 3080): " TUNNEL_PORT
             read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
-            PORTS=$(echo $PORTS_RAW | tr -d ' ' | sed 's/,/","/g')
+            PORTS=$(echo "$PORTS_RAW" | tr -d ' ' | sed 's/,/","/g')
             BACKHAUL_CONFIG="[server]
 bind_addr = \"0.0.0.0:$TUNNEL_PORT\"
 transport = \"tcp\"
@@ -88,7 +91,7 @@ ports = [
                 fi
             done
             read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
-            PORTS=$(echo $PORTS_RAW | tr -d ' ' | sed 's/,/","/g')
+            PORTS=$(echo "$PORTS_RAW" | tr -d ' ' | sed 's/,/","/g')
 
             echo "Installing openssl and generating SSL certificate..."
             sudo apt-get update && sudo apt-get install -y openssl
@@ -251,4 +254,4 @@ echo "" > /var/log/backhaul_monitor.log
 echo "Setup completed. Monitoring will run every $MON_MIN minutes."
 tail -n 3 /var/log/backhaul_monitor.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza safari"
+echo -e "\nDone\nThank you\nEdited by amirreza pilodecode"
