@@ -80,7 +80,6 @@ ports = [
 \"$PORTS\"
 ]"
         else
-            # WSSMUX
             while true; do
                 read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
                 if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
@@ -233,6 +232,7 @@ Description=Backhaul Health Check
 [Service]
 Type=oneshot
 ExecStart=/root/backhaul_monitor.sh
+User=root
 EOF
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.timer > /dev/null
@@ -260,4 +260,4 @@ echo "" > /var/log/backhaul_monitor.log
 echo "Setup completed. Monitoring will run every $MON_MIN minutes."
 tail -n 3 /var/log/backhaul_monitor.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza at pilot code"
+echo -e "\nDone\nThank you\nEdited by amirreza safari"
