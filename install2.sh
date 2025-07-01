@@ -1,5 +1,7 @@
 #!/bin/bash
 
+sudo timedatectl set-timezone UTC
+
 MY_GITHUB_URL="https://raw.githubusercontent.com/pilot-code/backhaul-monitoring/main"
 IRAN_URL="http://37.32.13.161"
 
@@ -26,11 +28,11 @@ if [ "$SRV_TYPE" != "monitor" ]; then
     FILE_NAME="backhaul_${OS}_${ARCH}.tar.gz"
 
     echo "Downloading $FILE_NAME ..."
-    if curl -L --fail -o "$FILE_NAME" "$MY_GITHUB_URL/$FILE_NAME"; then
+    if curl -L --fail --connect-timeout 10 --max-time 60 --speed-limit 10240 --speed-time 10 -o "$FILE_NAME" "$MY_GITHUB_URL/$FILE_NAME"; then
         echo "Download az github movafagh bood."
     else
-        echo "Download az github failed. Dar hale download az server iran..."
-        if curl -L --fail -o "$FILE_NAME" "$IRAN_URL/$FILE_NAME"; then
+        echo "Download az github failed (timeout ya error). Dar hale download az server iran..."
+        if curl -L --fail --connect-timeout 10 --max-time 60 --speed-limit 10240 --speed-time 10 -o "$FILE_NAME" "$IRAN_URL/$FILE_NAME"; then
             echo "Download az server iran movafagh bood."
         else
             echo "ERROR: download az har do source failed!"
@@ -309,4 +311,4 @@ echo "Setup completed. Monitoring and reboot-check will run. All cronjobs remove
 tail -n 3 /var/log/backhaul_monitor.log
 tail -n 3 /var/log/reboot-checker.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza SF pilot code :))))))))))))"
+echo -e "\nDone\nThank you\nEdited by amirreza safari"
