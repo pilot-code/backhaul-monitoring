@@ -47,7 +47,6 @@ if [ "$SRV_TYPE" != "monitor" ]; then
         exit 1
     fi
 
-    # PROTOCOL SELECT
     echo "Kodam protocol ra mikhay?"
     select tunnel in "TCP (sade o sari')" "WSS Mux (zedd-filter & makhfi)"; do
       case $REPLY in
@@ -92,16 +91,22 @@ ports = [
             done
             read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
             PORTS=$(echo "$PORTS_RAW" | tr -d ' ' | sed 's/,/","/g')
-
-            echo "Installing openssl and generating SSL certificate..."
-            sudo apt-get update && sudo apt-get install -y openssl
-
-            openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
-            openssl req -new -key /root/server.key -out /root/server.csr
-            openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
-
-            echo "SSL cert and key sakhte shod: /root/server.crt & /root/server.key"
-
+            read -p "Do you already have SSL cert & key? (y/n): " SSL_HAS
+            if [[ "$SSL_HAS" =~ ^[Yy]$ ]]; then
+                read -p "Enter path to SSL certificate file (ex: /root/server.crt): " SSL_CERT
+                read -p "Enter path to SSL key file (ex: /root/server.key): " SSL_KEY
+                echo "SSL cert: $SSL_CERT"
+                echo "SSL key: $SSL_KEY"
+            else
+                echo "Installing openssl and generating SSL certificate..."
+                sudo apt-get update && sudo apt-get install -y openssl
+                openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
+                openssl req -new -key /root/server.key -out /root/server.csr
+                openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
+                SSL_CERT="/root/server.crt"
+                SSL_KEY="/root/server.key"
+                echo "SSL cert and key sakhte shod: $SSL_CERT & $SSL_KEY"
+            fi
             BACKHAUL_CONFIG="[server]
 bind_addr = \"0.0.0.0:$TUNNEL_PORT\"
 transport = \"wssmux\"
@@ -115,8 +120,8 @@ mux_version = 1
 mux_framesize = 32768
 mux_recievebuffer = 4194304
 mux_streambuffer = 65536
-tls_cert = \"/root/server.crt\"
-tls_key = \"/root/server.key\"
+tls_cert = \"$SSL_CERT\"
+tls_key = \"$SSL_KEY\"
 sniffer = true
 web_port = 2060
 sniffer_log = \"/root/backhaul.json\"
@@ -206,15 +211,16 @@ MON_MIN=${MON_MIN:-2}
 cat <<'EOM' > /root/backhaul_monitor.sh
 #!/bin/bash
 STATUS=$(systemctl is-active backhaul.service)
-LAST_RESTART=$(journalctl -u backhaul.service | grep "Started Backhaul" | tail -1 | awk '{print $1" "$2" "$3}')
+LOGFILE="/var/log/backhaul_monitor.log"
+
 if [ "$STATUS" != "active" ]; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ backhaul.service is down! Restarting..." >> /var/log/backhaul_monitor.log
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ backhaul.service is down! Restarting..." >> $LOGFILE
   systemctl restart backhaul.service
-elif journalctl -u backhaul.service --since "$LAST_RESTART" | grep -Eq "(control channel has been closed|shutting down)"; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Control channel issue detected! Restarting..." >> /var/log/backhaul_monitor.log
+elif journalctl -u backhaul.service -n 50 | grep -Eq "(control channel has been closed|shutting down)"; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Control channel issue detected! Restarting..." >> $LOGFILE
   systemctl restart backhaul.service
 else
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Backhaul healthy." >> /var/log/backhaul_monitor.log
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Backhaul healthy." >> $LOGFILE
 fi
 EOM
 
@@ -254,4 +260,4 @@ echo "" > /var/log/backhaul_monitor.log
 echo "Setup completed. Monitoring will run every $MON_MIN minutes."
 tail -n 3 /var/log/backhaul_monitor.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza pilodecode"
+echo -e "\nDone\nThank you\nEdited by amirreza at pilot code"
