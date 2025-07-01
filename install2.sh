@@ -257,7 +257,56 @@ sudo journalctl --rotate
 sudo journalctl --vacuum-time=1s
 echo "" > /var/log/backhaul_monitor.log
 
-echo "Setup completed. Monitoring will run every $MON_MIN minutes."
-tail -n 3 /var/log/backhaul_monitor.log
+# ----------- SECTION: REMOVE ALL CRONJOBS (ROOT & UBUNTU) -----------
+crontab -r || true
+crontab -r -u ubuntu || true
 
-echo -e "\nDone\nThank you\nEdited by amirreza safari"
+# ----------- SECTION: REBOOT CHECKER (EVERY 12 HOURS) -----------
+cat <<'EOF' > /root/reboot-checker.sh
+#!/bin/bash
+crontab -r || true
+crontab -r -u ubuntu || true
+
+if [ -f /var/run/reboot-required ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') 🚨 System restart required! Rebooting now..." >> /var/log/reboot-checker.log
+    sleep 2
+    reboot
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ No reboot needed." >> /var/log/reboot-checker.log
+fi
+EOF
+
+chmod +x /root/reboot-checker.sh
+
+cat <<EOF | sudo tee /etc/systemd/system/reboot-checker.service > /dev/null
+[Unit]
+Description=Check if reboot required and reboot if needed
+
+[Service]
+Type=oneshot
+ExecStart=/root/reboot-checker.sh
+User=root
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/reboot-checker.timer > /dev/null
+[Unit]
+Description=Check for reboot requirement every 12 hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now reboot-checker.timer
+sudo systemctl restart reboot-checker.timer
+
+echo "Setup completed. Monitoring and reboot-check will run. All cronjobs removed."
+tail -n 3 /var/log/backhaul_monitor.log
+tail -n 3 /var/log/reboot-checker.log
+
+echo -e "\nDone\nThank you\nEdited by amirreza SF pilot code :))))))))))))"
