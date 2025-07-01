@@ -166,4 +166,4 @@ echo "" > /var/log/backhaul_monitor.log
 echo "Setup completed. Monitoring will run every $MON_MIN minutes."
 tail -n 3 /var/log/backhaul_monitor.log
 
-echo -e "\nDone\nthank you\nEdited by amirreza safari"
+echo -e "\nDone\nthank you\nEdited by Pilotcode"
