@@ -211,17 +211,35 @@ MON_MIN=${MON_MIN:-2}
 
 cat <<'EOM' > /root/backhaul_monitor.sh
 #!/bin/bash
-STATUS=$(systemctl is-active backhaul.service)
-LOGFILE="/var/log/backhaul_monitor.log"
 
-if [ "$STATUS" != "active" ]; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ backhaul.service is down! Restarting..." >> $LOGFILE
-  systemctl restart backhaul.service
-elif journalctl -u backhaul.service -n 50 | grep -Eq "(control channel has been closed|shutting down)"; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Control channel issue detected! Restarting..." >> $LOGFILE
-  systemctl restart backhaul.service
+LOGFILE="/var/log/backhaul_monitor.log"
+SERVICENAME="backhaul.service"
+
+STATUS=$(systemctl is-active $SERVICENAME)
+if [ "$STATUS" = "inactive" ] || [ "$STATUS" = "failed" ]; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ $SERVICENAME is down! Restarting..." >> $LOGFILE
+  systemctl restart $SERVICENAME
+  exit 0
+fi
+
+# Vaghti manitoring har 2 daqiqe ejra mishe, log haye 2 daqiqe ghabl ra check kon
+LAST_CHECK=$(date --date='2 minute ago' '+%Y-%m-%d %H:%M')
+journalctl -u $SERVICENAME --since "$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > /tmp/backhaul_monitor_tmp.log
+
+if [ -s /tmp/backhaul_monitor_tmp.log ]; then
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Issue detected in log (recent):" >> $LOGFILE
+  cat /tmp/backhaul_monitor_tmp.log >> $LOGFILE
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Restarting $SERVICENAME ..." >> $LOGFILE
+  systemctl restart $SERVICENAME
 else
   echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Backhaul healthy." >> $LOGFILE
+fi
+
+rm -f /tmp/backhaul_monitor_tmp.log
+
+# فقط 100 خط آخر را نگه دار، بقیه را پاک کن (auto-truncate)
+if [ -f "$LOGFILE" ]; then
+    tail -n 100 "$LOGFILE" > "$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
 fi
 EOM
 
@@ -311,4 +329,4 @@ echo "Setup completed. Monitoring and reboot-check will run. All cronjobs remove
 tail -n 3 /var/log/backhaul_monitor.log
 tail -n 3 /var/log/reboot-checker.log
 
-echo -e "\nDone\nThank you\nEdited by amirreza safari"
+echo -e "\nDone\nThank you\nEdited by amirreza pilotcode"
