@@ -1,122 +1,104 @@
 #!/bin/bash
 
-# ============================
-#      BACKHAUL MASTER
-#    EDITED BY PILOT CODE
-# ============================
+# ============ COLOR SETUP ============
+RED="$(tput setaf 1)"
+GREEN="$(tput setaf 2)"
+YELLOW="$(tput setaf 3)"
+BLUE="$(tput setaf 4)"
+BOLD="$(tput bold)"
+RESET="$(tput sgr0)"
 
-# تنظیم رنگ‌ها
-RED=$(tput setaf 1)
-GREEN=$(tput setaf 2)
-YELLOW=$(tput setaf 3)
-CYAN=$(tput setaf 6)
-RESET=$(tput sgr0)
+# ============ LOG FILES ============
+LOG_FILE="/var/log/backhaul_monitor.log"
+EXEC_LOG="/var/log/backhaul_exec.log"
 
-function logo() {
-    clear
-    echo "${CYAN}"
-    echo "╔══════════════════════════════════════╗"
-    echo "║          BACKHAUL MASTER             ║"
-    echo "║        EDITED BY PILOT CODE          ║"
-    echo "╚══════════════════════════════════════╝"
-    echo "${RESET}"
-}
+# ============ TIMEZONE SETUP ============
+echo "${BLUE}Setting server timezone to UTC...${RESET}"
+sudo timedatectl set-timezone UTC
 
-function show_menu() {
-    CHOICE=$(whiptail --title "Backhaul Master Menu" --menu "Choose an option" 20 60 10     "1" "Install on Iran server"     "2" "Install on Foreign server"     "3" "Install Monitoring only"     "4" "Check Monitoring Logs"     "5" "Service Status"     "6" "Uninstall All"     "7" "Update Monitoring"     "0" "Exit" 3>&1 1>&2 2>&3)
-
-    case "$CHOICE" in
-        1) install_iran ;;
-        2) install_foreign ;;
-        3) install_monitoring ;;
-        4) view_logs ;;
-        5) check_status ;;
-        6) uninstall_all ;;
-        7) update_monitoring ;;
-        0) exit 0 ;;
-    esac
-}
-
-function install_iran() {
-    echo "${YELLOW}Installing Backhaul on IRAN server...${RESET}"
-    # نمونه اجرای نصب برای ایران
-    read -p "Enter bind port (e.g. 3080): " BIND_PORT
-    read -p "Enter token: " TOKEN
-    read -p "Enter ports for tunneling (comma separated, e.g. 8880,8080): " PORTS
-    read -p "Which protocol? [tcp/wssmux]: " PROTO
-
-    if [[ "$PROTO" == "wssmux" ]]; then
-        echo "${CYAN}Checking for SSL certs...${RESET}"
-        read -p "Do you already have SSL certs? [y/n]: " HAS_SSL
-        if [[ "$HAS_SSL" == "n" ]]; then
-            sudo apt install openssl -y
-            openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
-            openssl req -new -key /root/server.key -out /root/server.csr
-            openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
-        fi
+# ============ FUNCTION: CHECK & REBOOT IF NEEDED ============
+check_reboot_required() {
+    if [ -f /var/run/reboot-required ]; then
+        echo "${YELLOW}Reboot required. Rebooting now...${RESET}" | tee -a "$LOG_FILE"
+        reboot
     fi
-
-    echo "${GREEN}✅ Installation on Iran server completed.${RESET}"
-    sleep 2
 }
 
-function install_foreign() {
-    echo "${YELLOW}Installing Backhaul on FOREIGN server...${RESET}"
-    read -p "Enter IP of Iran server: " IRAN_IP
-    read -p "Enter port of Iran server: " IRAN_PORT
-    read -p "Enter token: " TOKEN
-    read -p "Which protocol? [tcp/wssmux]: " PROTO
-    if [[ "$PROTO" == "wssmux" ]]; then
-        read -p "Enter domain for Cloudflare (e.g. example.com): " CF_DOMAIN
-    fi
-    echo "${GREEN}✅ Installation on Foreign server completed.${RESET}"
-    sleep 2
+# ============ FUNCTION: CLEAR OLD CRON JOBS ============
+clear_old_cron() {
+    crontab -l 2>/dev/null | grep -v backhaul_monitor.sh | crontab -
 }
 
-function install_monitoring() {
-    echo "${YELLOW}Installing Monitoring Service...${RESET}"
-    read -p "Enter interval for monitoring check (in minutes, default 2): " INTERVAL
-    INTERVAL=${INTERVAL:-2}
-    echo "${CYAN}Setting up systemd timer with $INTERVAL minutes...${RESET}"
-
-    # مانیتورینگ + ریبوت
-    cat <<EOF > /root/backhaul_monitor.sh
+# ============ FUNCTION: CREATE MONITOR SCRIPT ============
+create_monitor_script() {
+    cat > /root/backhaul_monitor.sh <<EOF
 #!/bin/bash
-log="/var/log/backhaul_monitor.log"
-if [[ ! -f \$log ]]; then touch \$log; fi
-tail -n 100 \$log > \$log.tmp && mv \$log.tmp \$log
 
-if ! systemctl is-active --quiet backhaul.service; then
-  echo "\$(date) ❌ backhaul.service is down! Restarting..." >> \$log
-  systemctl restart backhaul.service
-  echo "\$(date) ✅ Restarted backhaul.service" >> \$log
-else
-  echo "\$(date) ✅ backhaul.service is running." >> \$log
-fi
+MAX_LOGS=100
+LOG_FILE="$LOG_FILE"
+EXEC_LOG="$EXEC_LOG"
+TELEGRAM_API="\$1"
 
-if [ -f /var/run/reboot-required ]; then
-  echo "\$(date) ⚠️ Reboot required! Rebooting now..." >> \$log
-  reboot
-fi
+log() {
+    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" | tee -a "\$LOG_FILE"
+    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" >> "\$EXEC_LOG"
+    if [[ ! -z "\$TELEGRAM_API" && "\$1" == "❌"* ]]; then
+        curl -s -X POST "\$TELEGRAM_API" -d "text=\$1"
+    fi
+    tail -n \$MAX_LOGS "\$LOG_FILE" > "\$LOG_FILE.tmp" && mv "\$LOG_FILE.tmp" "\$LOG_FILE"
+}
+
+check_backhaul() {
+    STATUS=\$(systemctl is-active backhaul.service)
+    if [[ "\$STATUS" != "active" ]]; then
+        log "❌ backhaul.service is down! Restarting..."
+        systemctl restart backhaul.service
+        return
+    fi
+
+    ERROR_FOUND=
+    if journalctl -u backhaul.service -n 30 | grep -qiE 'error|refused|channel closed|control channel'; then
+        log "❌ Control channel issue detected! Restarting..."
+        systemctl restart backhaul.service
+        return
+    fi
+
+    CPU=\$(top -bn1 | grep '%Cpu' | awk '{print 2}')
+    MEM=\$(free -m | awk '/Mem/ {printf("%.2f", \$3/\$2 * 100.0)}')
+    UPTIME=\$(uptime -p)
+    log "✅ backhaul healthy. CPU: \$CPU%, MEM: \$MEM%, UPTIME: \$UPTIME"
+}
+
+check_reboot_required
+check_backhaul
 EOF
 
     chmod +x /root/backhaul_monitor.sh
+}
 
-    cat <<EOF > /etc/systemd/system/backhaul-monitor.service
+# ============ FUNCTION: CREATE SYSTEMD TIMER ============
+create_monitor_timer() {
+    local interval="$1"
+    local api_token="$2"
+
+    cat > /etc/systemd/system/backhaul-monitor.service <<EOF
 [Unit]
-Description=Backhaul Health Check
+Description=Backhaul Health Monitor
+
 [Service]
 Type=oneshot
-ExecStart=/root/backhaul_monitor.sh
+ExecStart=/root/backhaul_monitor.sh "$api_token"
 EOF
 
-    cat <<EOF > /etc/systemd/system/backhaul-monitor.timer
+    cat > /etc/systemd/system/backhaul-monitor.timer <<EOF
 [Unit]
-Description=Run backhaul monitor every $INTERVAL minutes
+Description=Run backhaul monitor every $interval
+
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=${INTERVAL}min
+OnBootSec=2min
+OnUnitActiveSec=$interval
 Unit=backhaul-monitor.service
+
 [Install]
 WantedBy=timers.target
 EOF
@@ -124,41 +106,75 @@ EOF
     systemctl daemon-reexec
     systemctl daemon-reload
     systemctl enable --now backhaul-monitor.timer
-    echo "${GREEN}✅ Monitoring enabled every $INTERVAL minutes.${RESET}"
-    sleep 2
 }
 
-function view_logs() {
-    echo "${CYAN}Last 20 lines of monitoring log:${RESET}"
-    tail -n 20 /var/log/backhaul_monitor.log
-    read -p "Press Enter to return to menu..." dummy
-}
-
-function check_status() {
-    echo "${CYAN}Backhaul Service Status:${RESET}"
-    systemctl status backhaul.service --no-pager
-    read -p "Press Enter to return to menu..." dummy
-}
-
-function uninstall_all() {
-    echo "${RED}Uninstalling everything...${RESET}"
-    systemctl disable --now backhaul.service backhaul-monitor.timer
-    rm -rf /root/backhaul /root/backhaul_monitor.sh /etc/systemd/system/backhaul*.*
-    echo "${GREEN}✅ Uninstalled all backhaul components.${RESET}"
-    sleep 2
-}
-
-function update_monitoring() {
-    echo "${CYAN}🔄 Updating Monitoring Script...${RESET}"
-    # در صورت نیاز اینجا کدهای جدید مانیتورینگ قرار بگیرند
-    echo "${GREEN}✅ Monitoring updated.${RESET}"
-}
-
-# تنظیم تایم‌زون سرور
-sudo timedatectl set-timezone UTC
-
-# منو اجرا شود
+# ============ MENU ============
 while true; do
-    logo
-    show_menu
+    echo "\n${BOLD}${BLUE}==== BACKHAUL MANAGER v1.1 ====${RESET}"
+    echo "1) Install Backhaul - Iran"
+    echo "2) Install Backhaul - Kharej"
+    echo "3) Setup Monitoring Only"
+    echo "4) View Monitoring Logs"
+    echo "5) Check Status"
+    echo "6) Fast Reconnect"
+    echo "7) Uninstall All"
+    echo "8) Update Monitor"
+    echo "0) Exit"
+    echo -n "${YELLOW}Enter your choice: ${RESET}"
+    read CHOICE
+
+    case "$CHOICE" in
+        1)
+            echo "Iran installation (Coming next in full script)"
+            ;;
+        2)
+            echo "Kharej installation (Coming next in full script)"
+            ;;
+        3)
+            echo -n "How often to check? (default 2m): "
+            read interval
+            [ -z "$interval" ] && interval="2m"
+            echo -n "Enter Telegram Bot API URL (or leave empty): "
+            read telegram_api
+            clear_old_cron
+            create_monitor_script
+            create_monitor_timer "$interval" "$telegram_api"
+            echo "${GREEN}Monitoring setup completed.${RESET}"
+            ;;
+        4)
+            echo "${BLUE}Showing last 20 log entries:${RESET}"
+            tail -n 20 "$LOG_FILE"
+            ;;
+        5)
+            systemctl status backhaul.service
+            ;;
+        6)
+            echo "Restarting backhaul.service..."
+            systemctl restart backhaul.service
+            ;;
+        7)
+            echo "Stopping services and deleting..."
+            systemctl stop backhaul.service backhaul-monitor.timer backhaul-monitor.service
+            systemctl disable backhaul.service backhaul-monitor.timer backhaul-monitor.service
+            rm -f /etc/systemd/system/backhaul* /root/backhaul_monitor.sh "$LOG_FILE" "$EXEC_LOG"
+            echo "${GREEN}Uninstall complete.${RESET}"
+            ;;
+        8)
+            echo "Updating monitor script..."
+            create_monitor_script
+            systemctl restart backhaul-monitor.timer
+            echo "${GREEN}Monitor script updated.${RESET}"
+            ;;
+        0)
+            echo "${BLUE}Goodbye!${RESET}"
+            break
+            ;;
+        *)
+            echo "${RED}Invalid choice!${RESET}"
+            ;;
+    esac
 done
+
+# ============ FOOTER ============
+echo "\n${BOLD}${GREEN}Done. Thank you!${RESET}"
+echo "${BOLD}${BLUE}EDITED BY PILOT CODE${RESET}"
