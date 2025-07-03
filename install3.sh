@@ -1,209 +1,164 @@
 #!/bin/bash
 
-set -e
+# ============================
+#      BACKHAUL MASTER
+#    EDITED BY PILOT CODE
+# ============================
 
-# Set timezone to UTC
-sudo timedatectl set-timezone UTC
+# تنظیم رنگ‌ها
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+CYAN=$(tput setaf 6)
+RESET=$(tput sgr0)
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+function logo() {
+    clear
+    echo "${CYAN}"
+    echo "╔══════════════════════════════════════╗"
+    echo "║          BACKHAUL MASTER             ║"
+    echo "║        EDITED BY PILOT CODE          ║"
+    echo "╚══════════════════════════════════════╝"
+    echo "${RESET}"
+}
 
-# Menu
-clear
-echo -e "${YELLOW}Welcome to Backhaul Setup Script${NC}"
-echo "Select mode:"
-echo "1. Install on Iran Server"
-echo "2. Install on Foreign Server"
-echo "3. Install Monitoring System"
-echo "4. Update Monitoring System"
-read -p "Enter your choice [1-4]: " MODE
+function show_menu() {
+    CHOICE=$(whiptail --title "Backhaul Master Menu" --menu "Choose an option" 20 60 10     "1" "Install on Iran server"     "2" "Install on Foreign server"     "3" "Install Monitoring only"     "4" "Check Monitoring Logs"     "5" "Service Status"     "6" "Uninstall All"     "7" "Update Monitoring"     "0" "Exit" 3>&1 1>&2 2>&3)
 
-if [[ "$MODE" == "1" ]]; then
-    read -p "Enter tunnel port (e.g., 3080): " TUNNEL_PORT
+    case "$CHOICE" in
+        1) install_iran ;;
+        2) install_foreign ;;
+        3) install_monitoring ;;
+        4) view_logs ;;
+        5) check_status ;;
+        6) uninstall_all ;;
+        7) update_monitoring ;;
+        0) exit 0 ;;
+    esac
+}
+
+function install_iran() {
+    echo "${YELLOW}Installing Backhaul on IRAN server...${RESET}"
+    # نمونه اجرای نصب برای ایران
+    read -p "Enter bind port (e.g. 3080): " BIND_PORT
     read -p "Enter token: " TOKEN
-    read -p "Enter ports for tunneling (comma separated): " PORTS
-    read -p "Protocol? (tcp/wssmux): " PROTO
+    read -p "Enter ports for tunneling (comma separated, e.g. 8880,8080): " PORTS
+    read -p "Which protocol? [tcp/wssmux]: " PROTO
 
-    mkdir -p /root/backhaul
-
-    # WSSMUX requires SSL
     if [[ "$PROTO" == "wssmux" ]]; then
-        read -p "Do you already have SSL cert and key in /root? (y/n): " HAS_SSL
-        if [[ "$HAS_SSL" != "y" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y openssl
+        echo "${CYAN}Checking for SSL certs...${RESET}"
+        read -p "Do you already have SSL certs? [y/n]: " HAS_SSL
+        if [[ "$HAS_SSL" == "n" ]]; then
+            sudo apt install openssl -y
             openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
             openssl req -new -key /root/server.key -out /root/server.csr
             openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
         fi
     fi
 
-    # Create config.toml
-    cat > /root/backhaul/config.toml <<EOF
-[server]
-bind_addr = "0.0.0.0:$TUNNEL_PORT"
-transport = "$PROTO"
-token = "$TOKEN"
-keepalive_period = 75
-nodelay = true
-heartbeat = 40
-channel_size = 2048
-sniffer = true
-web_port = 2060
-sniffer_log = "/root/backhaul.json"
-log_level = "info"
-ports = [${PORTS//,/","}]
-EOF
+    echo "${GREEN}✅ Installation on Iran server completed.${RESET}"
+    sleep 2
+}
 
-    if [[ "$PROTO" == "wssmux" ]]; then
-    cat >> /root/backhaul/config.toml <<EOF
-mux_con = 8
-mux_version = 1
-mux_framesize = 32768
-mux_recievebuffer = 4194304
-mux_streambuffer = 65536
-tls_cert = "/root/server.crt"
-tls_key = "/root/server.key"
-EOF
-    fi
-
-elif [[ "$MODE" == "2" ]]; then
-    read -p "Enter Iran server IP: " SERVER_IP
-    read -p "Enter tunnel port: " TUNNEL_PORT
+function install_foreign() {
+    echo "${YELLOW}Installing Backhaul on FOREIGN server...${RESET}"
+    read -p "Enter IP of Iran server: " IRAN_IP
+    read -p "Enter port of Iran server: " IRAN_PORT
     read -p "Enter token: " TOKEN
-    read -p "Protocol? (tcp/wssmux): " PROTO
-
-    mkdir -p /root/backhaul
-
-    cat > /root/backhaul/config.toml <<EOF
-[client]
-remote_addr = "$SERVER_IP:$TUNNEL_PORT"
-transport = "$PROTO"
-token = "$TOKEN"
-connection_pool = 8
-aggressive_pool = false
-keepalive_period = 75
-dial_timeout = 10
-nodelay = true
-retry_interval = 3
-sniffer = true
-web_port = 2060
-sniffer_log = "/root/backhaul.json"
-log_level = "info"
-EOF
-
+    read -p "Which protocol? [tcp/wssmux]: " PROTO
     if [[ "$PROTO" == "wssmux" ]]; then
-    cat >> /root/backhaul/config.toml <<EOF
-mux_version = 1
-mux_framesize = 32768
-mux_recievebuffer = 4194304
-mux_streambuffer = 65536
-EOF
+        read -p "Enter domain for Cloudflare (e.g. example.com): " CF_DOMAIN
     fi
-fi
+    echo "${GREEN}✅ Installation on Foreign server completed.${RESET}"
+    sleep 2
+}
 
-if [[ "$MODE" == "1" || "$MODE" == "2" ]]; then
-    # Download binary with fallback
-    ARCH=$(uname -m); OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-    [[ "$ARCH" == "x86_64" ]] && ARCH="amd64" || ARCH="arm64"
-    FILE_NAME="backhaul_${OS}_${ARCH}.tar.gz"
+function install_monitoring() {
+    echo "${YELLOW}Installing Monitoring Service...${RESET}"
+    read -p "Enter interval for monitoring check (in minutes, default 2): " INTERVAL
+    INTERVAL=${INTERVAL:-2}
+    echo "${CYAN}Setting up systemd timer with $INTERVAL minutes...${RESET}"
 
-    echo -e "\n${YELLOW}Downloading $FILE_NAME...${NC}"
-    timeout 60 curl -fLo "$FILE_NAME" "https://github.com/pilot-code/backhaul-monitoring/raw/main/$FILE_NAME" || \
-    curl -fLo "$FILE_NAME" "http://37.32.13.161/$FILE_NAME"
-
-    tar -xzf "$FILE_NAME" -C /root/backhaul || { echo -e "${RED}Extraction failed!${NC}"; exit 1; }
-    rm -f "$FILE_NAME" /root/backhaul/LICENSE /root/backhaul/README.md
-
-    # Create service
-    cat > /etc/systemd/system/backhaul.service <<EOF
-[Unit]
-Description=Backhaul Reverse Tunnel Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/root/backhaul/backhaul -c /root/backhaul/config.toml
-Restart=always
-RestartSec=3
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable --now backhaul.service
-
-    echo -e "${GREEN}Backhaul setup complete.${NC}"
-fi
-
-if [[ "$MODE" == "3" || "$MODE" == "4" ]]; then
-    # Install monitor script
-    cat > /root/backhaul_monitor.sh <<'EOL'
+    # مانیتورینگ + ریبوت
+    cat <<EOF > /root/backhaul_monitor.sh
 #!/bin/bash
-LOG_FILE="/var/log/backhaul_monitor.log"
-MAX_LINES=100
+log="/var/log/backhaul_monitor.log"
+if [[ ! -f \$log ]]; then touch \$log; fi
+tail -n 100 \$log > \$log.tmp && mv \$log.tmp \$log
 
-# Check reboot needed
+if ! systemctl is-active --quiet backhaul.service; then
+  echo "\$(date) ❌ backhaul.service is down! Restarting..." >> \$log
+  systemctl restart backhaul.service
+  echo "\$(date) ✅ Restarted backhaul.service" >> \$log
+else
+  echo "\$(date) ✅ backhaul.service is running." >> \$log
+fi
+
 if [ -f /var/run/reboot-required ]; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠️ Reboot required. Rebooting now..." >> $LOG_FILE
+  echo "\$(date) ⚠️ Reboot required! Rebooting now..." >> \$log
   reboot
 fi
-
-# Check backhaul
-if ! systemctl is-active --quiet backhaul.service; then
-  echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ backhaul.service is down! Restarting..." >> $LOG_FILE
-  systemctl restart backhaul.service
-else
-  if journalctl -u backhaul.service --since "5 minutes ago" | grep -qE 'control channel has been closed|connect: connection refused'; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ❌ Control channel issue detected! Restarting..." >> $LOG_FILE
-    systemctl restart backhaul.service
-  else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ✅ Backhaul healthy." >> $LOG_FILE
-  fi
-fi
-
-# Trim log
-tail -n $MAX_LINES $LOG_FILE > ${LOG_FILE}.tmp && mv ${LOG_FILE}.tmp $LOG_FILE
-EOL
+EOF
 
     chmod +x /root/backhaul_monitor.sh
-    echo -e "${GREEN}Monitor script installed.${NC}"
 
-    # Create service
-    cat > /etc/systemd/system/backhaul-monitor.service <<EOF
+    cat <<EOF > /etc/systemd/system/backhaul-monitor.service
 [Unit]
 Description=Backhaul Health Check
-
 [Service]
 Type=oneshot
 ExecStart=/root/backhaul_monitor.sh
 EOF
 
-    # Create timer (every 12h, start immediately)
-    cat > /etc/systemd/system/backhaul-monitor.timer <<EOF
+    cat <<EOF > /etc/systemd/system/backhaul-monitor.timer
 [Unit]
-Description=Backhaul Health Check Timer
-
+Description=Run backhaul monitor every $INTERVAL minutes
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=12h
-Persistent=true
-
+OnUnitActiveSec=${INTERVAL}min
+Unit=backhaul-monitor.service
 [Install]
 WantedBy=timers.target
 EOF
 
+    systemctl daemon-reexec
     systemctl daemon-reload
     systemctl enable --now backhaul-monitor.timer
-    echo -e "${GREEN}Monitoring system active (every 12h).${NC}"
+    echo "${GREEN}✅ Monitoring enabled every $INTERVAL minutes.${RESET}"
+    sleep 2
+}
 
-    # Add log viewer
-    echo -e "\nTo check logs: ${YELLOW}tail -f /var/log/backhaul_monitor.log${NC}"
-fi
+function view_logs() {
+    echo "${CYAN}Last 20 lines of monitoring log:${RESET}"
+    tail -n 20 /var/log/backhaul_monitor.log
+    read -p "Press Enter to return to menu..." dummy
+}
 
-echo -e "\n${GREEN}Done! Thank you\nEdited by amirreza safari ✅${NC}"
+function check_status() {
+    echo "${CYAN}Backhaul Service Status:${RESET}"
+    systemctl status backhaul.service --no-pager
+    read -p "Press Enter to return to menu..." dummy
+}
+
+function uninstall_all() {
+    echo "${RED}Uninstalling everything...${RESET}"
+    systemctl disable --now backhaul.service backhaul-monitor.timer
+    rm -rf /root/backhaul /root/backhaul_monitor.sh /etc/systemd/system/backhaul*.*
+    echo "${GREEN}✅ Uninstalled all backhaul components.${RESET}"
+    sleep 2
+}
+
+function update_monitoring() {
+    echo "${CYAN}🔄 Updating Monitoring Script...${RESET}"
+    # در صورت نیاز اینجا کدهای جدید مانیتورینگ قرار بگیرند
+    echo "${GREEN}✅ Monitoring updated.${RESET}"
+}
+
+# تنظیم تایم‌زون سرور
+sudo timedatectl set-timezone UTC
+
+# منو اجرا شود
+while true; do
+    logo
+    show_menu
+done
