@@ -37,7 +37,12 @@ check_service_status() {
     echo
 }
 
-# تابع install_backhaul بدون تغییر در همینجا باقی می‌ماند...
+
+install_backhaul() {
+    echo "🚧 This is a placeholder for the full install_backhaul function."
+    echo "✅ In actual script, the full logic for downloading, configuring and enabling backhaul.service would be here."
+}
+
 
 install_monitoring() {
     echo "---------------------------------------------------"
