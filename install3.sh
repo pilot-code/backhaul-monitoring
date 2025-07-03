@@ -37,7 +37,7 @@ check_service_status() {
     echo
 }
 
-# (install_backhaul remains unchanged)
+# تابع install_backhaul بدون تغییر در همینجا باقی می‌ماند...
 
 install_monitoring() {
     echo "---------------------------------------------------"
@@ -50,25 +50,23 @@ cat <<'EOM' > /root/backhaul_monitor.sh
 LOGFILE="/var/log/backhaul_monitor.log"
 SERVICENAME="backhaul.service"
 TMP_LOG="/tmp/backhaul_monitor_tmp.log"
-REBOOT_FLAG="/var/log/backhaul_reboot_count"
 
 CHECKTIME=$(date '+%Y-%m-%d %H:%M:%S')
 STATUS=$(systemctl is-active $SERVICENAME)
 STATUS_DETAIL=$(systemctl status $SERVICENAME --no-pager | head -30)
 LAST_CHECK=$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
 
-# نیاز OS به ریبوت (مثلاً بعد از آپدیت کرنل)
+journalctl -u $SERVICENAME --since "$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > $TMP_LOG
+
+# ✅ اضافه شده: اگر سیستم نیاز به ریبوت داشته باشد
 if [ -f /var/run/reboot-required ]; then
-  echo "$CHECKTIME 🔁 System needs reboot (OS-level). Rebooting now..." >> $LOGFILE
+  echo "$CHECKTIME 🔁 System requires reboot. Rebooting now..." >> $LOGFILE
   sleep 5
   reboot
 fi
 
-# بررسی لاگ‌های اخیر برای ارورهای مهم
-journalctl -u $SERVICENAME --since "$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > $TMP_LOG
-
-if [ "$STATUS" != "active" ] || [ -s $TMP_LOG ]; then
-  echo "$CHECKTIME ❌ Issue detected with $SERVICENAME" >> $LOGFILE
+if [ "$STATUS" != "active" ]; then
+  echo "$CHECKTIME ❌ $SERVICENAME is DOWN! [status: $STATUS]" >> $LOGFILE
   echo "$CHECKTIME ❗ Trying to restart $SERVICENAME..." >> $LOGFILE
   if systemctl restart $SERVICENAME; then
     echo "$CHECKTIME 🔄 Restart command successful." >> $LOGFILE
@@ -78,24 +76,27 @@ if [ "$STATUS" != "active" ] || [ -s $TMP_LOG ]; then
   else
     echo "$CHECKTIME 🚫 ERROR: Restart command FAILED!" >> $LOGFILE
   fi
-
-  COUNT=$(cat "$REBOOT_FLAG" 2>/dev/null || echo 0)
-  COUNT=$((COUNT + 1))
-  echo "$COUNT" > "$REBOOT_FLAG"
-  if [ "$COUNT" -ge 3 ]; then
-    echo "$CHECKTIME ⚠️ Service failed 3 times in a row. Rebooting system..." >> $LOGFILE
-    sleep 5
-    reboot
+elif [ -s $TMP_LOG ]; then
+  echo "$CHECKTIME ⚠️ Issue detected in recent log:" >> $LOGFILE
+  cat $TMP_LOG >> $LOGFILE
+  echo "$CHECKTIME ❗ Trying to restart $SERVICENAME..." >> $LOGFILE
+  if systemctl restart $SERVICENAME; then
+    echo "$CHECKTIME 🔄 Restart command successful." >> $LOGFILE
+    sleep 1
+    NEW_STATUS=$(systemctl is-active $SERVICENAME)
+    echo "$CHECKTIME 🟢 Status after restart: $NEW_STATUS" >> $LOGFILE
+  else
+    echo "$CHECKTIME 🚫 ERROR: Restart command FAILED!" >> $LOGFILE
   fi
 else
   echo "$CHECKTIME ✅ Backhaul healthy. [status: $STATUS]" >> $LOGFILE
-  echo "0" > "$REBOOT_FLAG"
 fi
 
 echo "---- [ $CHECKTIME : systemctl status $SERVICENAME ] ----" > /var/log/backhaul_status_last.log
 echo "$STATUS_DETAIL" >> /var/log/backhaul_status_last.log
 
 rm -f $TMP_LOG
+
 if [ -f "$LOGFILE" ]; then
     tail -n 100 "$LOGFILE" > "$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
 fi
