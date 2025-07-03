@@ -1,180 +1,188 @@
 #!/bin/bash
 
-# ============ COLOR SETUP ============
-RED="$(tput setaf 1)"
-GREEN="$(tput setaf 2)"
-YELLOW="$(tput setaf 3)"
-BLUE="$(tput setaf 4)"
-BOLD="$(tput bold)"
-RESET="$(tput sgr0)"
+set -e
 
-# ============ LOG FILES ============
-LOG_FILE="/var/log/backhaul_monitor.log"
-EXEC_LOG="/var/log/backhaul_exec.log"
+# تنظیمات اولیه
+clear
+echo "====== BACKHAUL MASTER INSTALLER v1.2 ======"
+echo "Select an option:"
+echo "1) Setup Iran Server"
+echo "2) Setup Foreign Server"
+echo "3) Install Monitoring"
+echo "4) View Monitoring Log"
+echo "5) View Backhaul Status"
+read -rp "Enter your choice (1-5): " opt
 
-# ============ TIMEZONE SETUP ============
-echo "${BLUE}Setting server timezone to UTC...${RESET}"
-sudo timedatectl set-timezone UTC
+ARCH=$(uname -m)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+[[ "$ARCH" == "x86_64" ]] && ARCH="amd64" || ARCH="arm64"
+FILE_NAME="backhaul_${OS}_${ARCH}.tar.gz"
 
-# ============ FUNCTION: CHECK & REBOOT IF NEEDED ============
-check_reboot_required() {
-    if [ -f /var/run/reboot-required ]; then
-        echo "${YELLOW}Reboot required. Rebooting now...${RESET}" | tee -a "$LOG_FILE"
-        reboot
-    fi
+GITHUB_URL="https://raw.githubusercontent.com/pilot-code/backhaul-monitoring/main/$FILE_NAME"
+BACKUP_URL="http://37.32.13.161/$FILE_NAME"
+
+# دانلود فایل باینری
+download_binary() {
+  echo "📦 Downloading $FILE_NAME..."
+  if ! curl -fsSL --max-time 60 "$GITHUB_URL" -o "$FILE_NAME"; then
+    echo "⚠️ GitHub failed, switching to backup..."
+    curl -fsSL "$BACKUP_URL" -o "$FILE_NAME"
+  fi
+  mkdir -p /root/backhaul
+  tar -xzf "$FILE_NAME" -C /root/backhaul || { echo "❌ Failed to extract."; exit 1; }
+  rm -f "$FILE_NAME" /root/backhaul/LICENSE /root/backhaul/README.md
 }
 
-# ============ FUNCTION: CLEAR OLD CRON JOBS ============
-clear_old_cron() {
-    crontab -l 2>/dev/null | grep -v backhaul_monitor.sh | crontab -
-}
+# تنظیم timezone به UTC
+timedatectl set-timezone UTC
 
-# ============ FUNCTION: CREATE MONITOR SCRIPT ============
-create_monitor_script() {
-    cat > /root/backhaul_monitor.sh <<EOF
+# مانیتورینگ
+if [[ "$opt" == "3" ]]; then
+  echo "🔍 Installing monitoring..."
+  cat > /root/backhaul_monitor.sh <<EOF
 #!/bin/bash
 
-MAX_LOGS=100
-LOG_FILE="$LOG_FILE"
-EXEC_LOG="$EXEC_LOG"
-TELEGRAM_API="\$1"
+LOG_FILE="/var/log/backhaul_monitor.log"
+MAX_LINES=100
+STATUS=\$(systemctl is-active backhaul.service)
 
-log() {
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" | tee -a "\$LOG_FILE"
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" >> "\$EXEC_LOG"
-    if [[ ! -z "\$TELEGRAM_API" && "\$1" == "❌"* ]]; then
-        curl -s -X POST "\$TELEGRAM_API" -d "text=\$1"
-    fi
-    tail -n \$MAX_LOGS "\$LOG_FILE" > "\$LOG_FILE.tmp" && mv "\$LOG_FILE.tmp" "\$LOG_FILE"
-}
+if ! journalctl -u backhaul.service | tail -n 20 | grep -q "listener started successfully"; then
+  echo "\$(date '+%F %T') ❌ Control channel issue detected! Restarting..." >> "\$LOG_FILE"
+  systemctl restart backhaul.service
+elif [[ "\$STATUS" != "active" ]]; then
+  echo "\$(date '+%F %T') ❌ backhaul.service is down! Restarting..." >> "\$LOG_FILE"
+  systemctl restart backhaul.service
+else
+  echo "\$(date '+%F %T') ✅ backhaul.service is running." >> "\$LOG_FILE"
+fi
 
-check_backhaul() {
-    STATUS=\$(systemctl is-active backhaul.service)
-    if [[ "\$STATUS" != "active" ]]; then
-        log "❌ backhaul.service is down! Restarting..."
-        systemctl restart backhaul.service
-        return
-    fi
+# لاگ‌ها بیشتر از 100 خط نشه
+tail -n \$MAX_LINES "\$LOG_FILE" > "\$LOG_FILE.tmp" && mv "\$LOG_FILE.tmp" "\$LOG_FILE"
 
-    ERROR_FOUND=
-    if journalctl -u backhaul.service -n 30 | grep -qiE 'error|refused|channel closed|control channel'; then
-        log "❌ Control channel issue detected! Restarting..."
-        systemctl restart backhaul.service
-        return
-    fi
-
-    CPU=\$(top -bn1 | grep '%Cpu' | awk '{print 2}')
-    MEM=\$(free -m | awk '/Mem/ {printf("%.2f", \$3/\$2 * 100.0)}')
-    UPTIME=\$(uptime -p)
-    log "✅ backhaul healthy. CPU: \$CPU%, MEM: \$MEM%, UPTIME: \$UPTIME"
-}
-
-check_reboot_required
-check_backhaul
+# چک ریبوت
+if command -v needs-restarting >/dev/null && needs-restarting -r >/dev/null 2>&1; then
+  echo "\$(date '+%F %T') 🔁 System needs reboot. Rebooting..." >> "\$LOG_FILE"
+  reboot
+fi
 EOF
 
-    chmod +x /root/backhaul_monitor.sh
-}
+  chmod +x /root/backhaul_monitor.sh
 
-# ============ FUNCTION: CREATE SYSTEMD TIMER ============
-create_monitor_timer() {
-    local interval="$1"
-    local api_token="$2"
-
-    cat > /etc/systemd/system/backhaul-monitor.service <<EOF
+  cat > /etc/systemd/system/backhaul-monitor.service <<EOF
 [Unit]
-Description=Backhaul Health Monitor
+Description=Backhaul Monitor
 
 [Service]
 Type=oneshot
-ExecStart=/root/backhaul_monitor.sh "$api_token"
+ExecStart=/root/backhaul_monitor.sh
 EOF
 
-    cat > /etc/systemd/system/backhaul-monitor.timer <<EOF
+  cat > /etc/systemd/system/backhaul-monitor.timer <<EOF
 [Unit]
-Description=Run backhaul monitor every $interval
+Description=Backhaul Monitor Timer
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=$interval
+OnBootSec=1min
+OnUnitActiveSec=2min
 Unit=backhaul-monitor.service
 
 [Install]
 WantedBy=timers.target
 EOF
 
-    systemctl daemon-reexec
-    systemctl daemon-reload
-    systemctl enable --now backhaul-monitor.timer
-}
+  systemctl daemon-reload
+  systemctl enable --now backhaul-monitor.timer
+  echo "✅ Monitoring installed and running every 2 minutes."
+  echo "Done – Thank you – Edited by PILOT CODE"
+  exit 0
+fi
 
-# ============ MENU ============
-while true; do
-    echo "\n${BOLD}${BLUE}==== BACKHAUL MANAGER v1.1 ====${RESET}"
-    echo "1) Install Backhaul - Iran"
-    echo "2) Install Backhaul - Kharej"
-    echo "3) Setup Monitoring Only"
-    echo "4) View Monitoring Logs"
-    echo "5) Check Status"
-    echo "6) Fast Reconnect"
-    echo "7) Uninstall All"
-    echo "8) Update Monitor"
-    echo "0) Exit"
-    echo -n "${YELLOW}Enter your choice: ${RESET}"
-    read CHOICE
+# نمایش لاگ
+if [[ "$opt" == "4" ]]; then
+  echo "📄 Showing last 30 lines of monitoring log:"
+  tail -n 30 /var/log/backhaul_monitor.log || echo "No log found."
+  exit 0
+fi
 
-    case "$CHOICE" in
-        1)
-            echo "Iran installation (Coming next in full script)"
-            ;;
-        2)
-            echo "Kharej installation (Coming next in full script)"
-            ;;
-        3)
-            echo -n "How often to check? (default 2m): "
-            read interval
-            [ -z "$interval" ] && interval="2m"
-            echo -n "Enter Telegram Bot API URL (or leave empty): "
-            read telegram_api
-            clear_old_cron
-            create_monitor_script
-            create_monitor_timer "$interval" "$telegram_api"
-            echo "${GREEN}Monitoring setup completed.${RESET}"
-            ;;
-        4)
-            echo "${BLUE}Showing last 20 log entries:${RESET}"
-            tail -n 20 "$LOG_FILE"
-            ;;
-        5)
-            systemctl status backhaul.service
-            ;;
-        6)
-            echo "Restarting backhaul.service..."
-            systemctl restart backhaul.service
-            ;;
-        7)
-            echo "Stopping services and deleting..."
-            systemctl stop backhaul.service backhaul-monitor.timer backhaul-monitor.service
-            systemctl disable backhaul.service backhaul-monitor.timer backhaul-monitor.service
-            rm -f /etc/systemd/system/backhaul* /root/backhaul_monitor.sh "$LOG_FILE" "$EXEC_LOG"
-            echo "${GREEN}Uninstall complete.${RESET}"
-            ;;
-        8)
-            echo "Updating monitor script..."
-            create_monitor_script
-            systemctl restart backhaul-monitor.timer
-            echo "${GREEN}Monitor script updated.${RESET}"
-            ;;
-        0)
-            echo "${BLUE}Goodbye!${RESET}"
-            break
-            ;;
-        *)
-            echo "${RED}Invalid choice!${RESET}"
-            ;;
-    esac
-done
+# نمایش وضعیت سرویس
+if [[ "$opt" == "5" ]]; then
+  echo "📊 backhaul.service status:"
+  systemctl status backhaul.service --no-pager
+  echo ""
+  echo "🧠 Checking if system needs reboot:"
+  if command -v needs-restarting >/dev/null && needs-restarting -r >/dev/null 2>&1; then
+    echo "⚠️ Reboot recommended!"
+  else
+    echo "✅ No reboot needed."
+  fi
+  exit 0
+fi
 
-# ============ FOOTER ============
-echo "\n${BOLD}${GREEN}Done. Thank you!${RESET}"
-echo "${BOLD}${BLUE}EDITED BY PILOT CODE${RESET}"
+# نصب سرور ایران یا خارج
+read -rp "Enter token: " TOKEN
+
+if [[ "$opt" == "1" ]]; then
+  read -rp "Enter tunnel bind port (e.g. 3080): " PORT
+  read -rp "Enter tunnel ports list (comma-separated): " PORTS
+  download_binary
+  cat > /root/backhaul/config.toml <<EOF
+[server]
+bind_addr = "0.0.0.0:$PORT"
+transport = "tcp"
+token = "$TOKEN"
+keepalive_period = 75
+nodelay = true
+heartbeat = 40
+channel_size = 2048
+sniffer = true
+web_port = 2060
+sniffer_log = "/root/backhaul.json"
+log_level = "info"
+ports = [${PORTS//,/","}]
+EOF
+
+elif [[ "$opt" == "2" ]]; then
+  read -rp "Enter Iran server IP: " IP
+  read -rp "Enter Iran server port: " PORT
+  download_binary
+  cat > /root/backhaul/config.toml <<EOF
+[client]
+remote_addr = "$IP:$PORT"
+transport = "tcp"
+token = "$TOKEN"
+keepalive_period = 75
+dial_timeout = 10
+nodelay = true
+retry_interval = 3
+connection_pool = 8
+aggressive_pool = false
+sniffer = true
+web_port = 2060
+sniffer_log = "/root/backhaul.json"
+log_level = "info"
+EOF
+else
+  echo "❌ Invalid option."
+  exit 1
+fi
+
+# سرویس بک‌هال
+cat > /etc/systemd/system/backhaul.service <<EOF
+[Unit]
+Description=Backhaul Tunnel
+After=network.target
+
+[Service]
+ExecStart=/root/backhaul/backhaul -c /root/backhaul/config.toml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now backhaul.service
+
+echo "✅ backhaul.service is up."
+echo "Done – Thank you – Edited by PILOT CODE"
