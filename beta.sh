@@ -120,11 +120,11 @@ install_backhaul() {
     echo -e "\n${CYAN}==== Configuration ====${NC}"
     echo -e "${YELLOW}Select protocol:${NC}"
     select tunnel in "TCP (simple)" "WSS Mux (secure)"; do
-      case $REPLY in
-        1) TUNNEL_TYPE="tcp"; break ;;
-        2) TUNNEL_TYPE="wssmux"; break ;;
-        *) echo -e "${RED}Invalid choice!${NC}" ;;
-      esac
+        case $REPLY in
+            1) TUNNEL_TYPE="tcp"; break ;;
+            2) TUNNEL_TYPE="wssmux"; break ;;
+            *) echo -e "${RED}Invalid choice!${NC}" ;;
+        esac
     done
 
     read -p "Backhaul token: " BKTOKEN
@@ -164,7 +164,55 @@ ports = [
 \"$PORTS\"
 ]"
         else
-            # WSS Mux config (unchanged)
+            # WSS Mux config for server
+            while true; do
+                read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
+                if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
+                    break
+                else
+                    echo -e "${RED}Only 443 or 8443 are allowed!${NC}"
+                fi
+            done
+            read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
+            PORTS=$(echo "$PORTS_RAW" | tr -d ' ' | sed 's/,/","/g')
+            read -p "Do you already have SSL cert & key? (y/n): " SSL_HAS
+            if [[ "$SSL_HAS" =~ ^[Yy]$ ]]; then
+                read -p "Enter path to SSL certificate file (ex: /root/server.crt): " SSL_CERT
+                read -p "Enter path to SSL key file (ex: /root/server.key): " SSL_KEY
+                echo -e "${YELLOW}SSL cert: $SSL_CERT"
+                echo "SSL key: $SSL_KEY${NC}"
+            else
+                echo -e "${YELLOW}Installing openssl and generating SSL certificate...${NC}"
+                sudo apt-get update && sudo apt-get install -y openssl
+                openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
+                openssl req -new -key /root/server.key -out /root/server.csr
+                openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
+                SSL_CERT="/root/server.crt"
+                SSL_KEY="/root/server.key"
+                echo -e "${GREEN}SSL cert and key created: $SSL_CERT & $SSL_KEY${NC}"
+            fi
+            BACKHAUL_CONFIG="[server]
+bind_addr = \"0.0.0.0:$TUNNEL_PORT\"
+transport = \"wssmux\"
+token = \"$BKTOKEN\"
+keepalive_period = 75
+nodelay = true
+heartbeat = 40
+channel_size = 2048
+mux_con = 8
+mux_version = 1
+mux_framesize = 32768
+mux_recievebuffer = 4194304
+mux_streambuffer = 65536
+tls_cert = \"$SSL_CERT\"
+tls_key = \"$SSL_KEY\"
+sniffer = true
+web_port = 2060
+sniffer_log = \"/root/backhaul.json\"
+log_level = \"info\"
+ports = [
+\"$PORTS\"
+]"
         fi
     else
         if [ "$TUNNEL_TYPE" = "tcp" ]; then
@@ -197,7 +245,35 @@ tun_name = \"backhaul\"
 tun_subnet = \"10.10.10.0/24\"
 mtu = $MTU"
         else
-            # WSS Mux config (unchanged)
+            # WSS Mux config for client
+            read -p "Iran server IP: " IRAN_IP
+            while true; do
+                read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
+                if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
+                    break
+                else
+                    echo -e "${RED}Only 443 or 8443 are allowed!${NC}"
+                fi
+            done
+            BACKHAUL_CONFIG="[client]
+remote_addr = \"$IRAN_IP:$TUNNEL_PORT\"
+edge_ip = \"\"
+transport = \"wssmux\"
+token = \"$BKTOKEN\"
+keepalive_period = 75
+dial_timeout = 10
+nodelay = true
+retry_interval = 3
+connection_pool = 8
+aggressive_pool = false
+mux_version = 1
+mux_framesize = 32768
+mux_recievebuffer = 4194304
+mux_streambuffer = 65536
+sniffer = true
+web_port = 2060
+sniffer_log = \"/root/backhaul.json\"
+log_level = \"info\""
         fi
     fi
 
