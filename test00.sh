@@ -85,90 +85,102 @@ install_monitoring() {
     read -p "Har chand daghighe monitoring check beshe? (default: 2): " MON_MIN
     MON_MIN=${MON_MIN:-2}
 
-cat <<'EOM' > /root/backhaul_monitor.sh
-#!/bin/bash
+    echo "Aya in server Iran ast ya Kharej?"
+    select srv_type in "Iran" "Kharej"; do
+      case $REPLY in
+        1)
+          read -p "Port tunnel dar server Iran: " TUNNEL_PORT
+          TUNNEL_HOST="127.0.0.1"
+          break
+          ;;
+        2)
+          read -p "IP server Iran: " TUNNEL_HOST
+          read -p "Port tunnel: " TUNNEL_PORT
+          break
+          ;;
+        *)
+          echo "Lotfan adad sahih vared konid."
+          ;;
+      esac
+    done
 
+cat <<EOM > /root/backhaul_monitor.sh
+#!/bin/bash
 LOGFILE="/var/log/backhaul_monitor.log"
 SERVICENAME="backhaul.service"
-RESTART_COUNT_FILE="/tmp/backhaul_restart_count"
-TIME=$(date '+%Y-%m-%d %H:%M:%S')
-TUNNEL_HOST="127.0.0.1"
-TUNNEL_PORT="3080"
+RESTART_FILE="/tmp/backhaul_restart_count"
+CYCLE_FILE="/tmp/backhaul_cycle_count"
+TIME=\$(date '+%Y-%m-%d %H:%M:%S')
 
-COUNT=$(cat $RESTART_COUNT_FILE 2>/dev/null || echo 0)
-
-check_tcp() {
-  nc -z -w3 $TUNNEL_HOST $TUNNEL_PORT
-}
-
-check_ping() {
-  ping -c1 -W1 $TUNNEL_HOST >/dev/null
-}
-
-check_http() {
-  curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT >/dev/null
-}
-
-check_tls() {
-  echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol'
-}
+COUNT=\$(cat \$RESTART_FILE 2>/dev/null || echo 0)
+CYCLE=\$(cat \$CYCLE_FILE 2>/dev/null || echo 0)
 
 STATUS_OK=true
 
-if ! check_tcp; then
-  echo "$TIME ❌ TCP check failed" >> $LOGFILE
+if ! nc -z -w3 $TUNNEL_HOST $TUNNEL_PORT; then
+  echo "\$TIME ❌ TCP failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
   STATUS_OK=false
 fi
 
-if ! check_ping; then
-  echo "$TIME ⚠️ Ping check failed" >> $LOGFILE
+if ! ping -c1 -W1 $TUNNEL_HOST >/dev/null; then
+  echo "\$TIME ⚠️ Ping failed to $TUNNEL_HOST" >> \$LOGFILE
   STATUS_OK=false
 fi
 
-if ! check_http; then
-  echo "$TIME 🚫 HTTP check failed" >> $LOGFILE
+if ! curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT >/dev/null; then
+  echo "\$TIME 🚫 HTTP failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
   STATUS_OK=false
 fi
 
-if ! check_tls; then
-  echo "$TIME 🔒 TLS handshake failed" >> $LOGFILE
+if ! echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol'; then
+  echo "\$TIME 🔒 TLS handshake failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
   STATUS_OK=false
 fi
 
-if ! $STATUS_OK; then
-  echo "$TIME 🔄 Restarting $SERVICENAME (failure count=$COUNT)" >> $LOGFILE
-  systemctl restart $SERVICENAME
-  COUNT=$((COUNT+1))
+if ! \$STATUS_OK; then
+  echo "\$TIME 🔄 Restarting \$SERVICENAME (failure count=\$COUNT)" >> \$LOGFILE
+  systemctl restart \$SERVICENAME
+  COUNT=\$((COUNT+1))
 else
   COUNT=0
-  echo "$TIME ✅ All checks passed" >> $LOGFILE
+  echo "\$TIME ✅ All checks passed for $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
 fi
 
-echo $COUNT > $RESTART_COUNT_FILE
+CYCLE=\$((CYCLE+1))
+if [ \$CYCLE -ge 3 ]; then
+  journalctl -u \$SERVICENAME --since \"3 minutes ago\" | grep -E '(closed|shutting down|inactive)' && {
+    echo "\$TIME ⚠️ Log issue detected" >> \$LOGFILE
+    systemctl restart \$SERVICENAME
+    COUNT=\$((COUNT+1))
+  }
+  CYCLE=0
+fi
 
-if [ $COUNT -ge 3 ]; then
-  echo "$TIME 🔁 3 failures detected, rebooting server..." >> $LOGFILE
+echo \$COUNT > \$RESTART_FILE
+echo \$CYCLE > \$CYCLE_FILE
+
+if [ \$COUNT -ge 3 ]; then
+  echo "\$TIME 🔁 3 failures, rebooting server..." >> \$LOGFILE
   reboot
 fi
 
-tail -n 100 $LOGFILE > $LOGFILE.tmp && mv $LOGFILE.tmp $LOGFILE
+tail -n 100 \$LOGFILE > \$LOGFILE.tmp && mv \$LOGFILE.tmp \$LOGFILE
 EOM
 
-chmod +x /root/backhaul_monitor.sh
+    chmod +x /root/backhaul_monitor.sh
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.service > /dev/null
 [Unit]
-Description=Backhaul Health Check
+Description=Backhaul Monitoring Service
 
 [Service]
 Type=oneshot
 ExecStart=/root/backhaul_monitor.sh
-User=root
 EOF
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.timer > /dev/null
 [Unit]
-Description=Run Backhaul Health Check every $MON_MIN minutes
+Description=Run Backhaul Monitoring every ${MON_MIN} minutes
 
 [Timer]
 OnBootSec=2min
@@ -179,14 +191,9 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-sudo systemctl daemon-reexec
-sudo systemctl daemon-reload
-sudo systemctl enable --now backhaul-monitor.timer
-sudo systemctl restart backhaul-monitor.timer
-sudo systemctl restart backhaul-monitor.service
-sudo journalctl --rotate
-sudo journalctl --vacuum-time=1s
-echo "" > /var/log/backhaul_monitor.log
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now backhaul-monitor.timer
+    echo "✅ Monitoring setup complete for $TUNNEL_HOST:$TUNNEL_PORT"
 }
 
 
