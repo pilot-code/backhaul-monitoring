@@ -234,96 +234,63 @@ install_monitoring() {
     read -p "Har chand daghighe monitoring check beshe? (default: 2): " MON_MIN
     MON_MIN=${MON_MIN:-2}
 
-    echo "Aya in server Iran ast ya Kharej?"
-    select srv_type in "Iran" "Kharej"; do
-      case $REPLY in
-        1)
-          read -p "Port tunnel dar server Iran: " TUNNEL_PORT
-          TUNNEL_HOST="127.0.0.1"
-          break
-          ;;
-        2)
-          read -p "IP server Iran: " TUNNEL_HOST
-          read -p "Port tunnel: " TUNNEL_PORT
-          break
-          ;;
-        *)
-          echo "Lotfan adad sahih vared konid."
-          ;;
-      esac
-    done
+    read -p "IP ya hostname server moghabel: " TUNNEL_HOST
+    read -p "Port tunnel server moghabel: " TUNNEL_PORT
 
 cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
+
 LOGFILE="/var/log/backhaul_monitor.log"
 SERVICENAME="backhaul.service"
-RESTART_FILE="/tmp/backhaul_restart_count"
-CYCLE_FILE="/tmp/backhaul_cycle_count"
-LAST_REBOOT_FILE="/tmp/last_reboot_check"
-TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+TMP_LOG="/tmp/backhaul_monitor_tmp.log"
+CHECKTIME=\$(date '+%Y-%m-%d %H:%M:%S')
+TUNNEL_HOST="$TUNNEL_HOST"
+TUNNEL_PORT="$TUNNEL_PORT"
+LAST_CHECK=\$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
 
-COUNT=\$(cat \$RESTART_FILE 2>/dev/null || echo 0)
-CYCLE=\$(cat \$CYCLE_FILE 2>/dev/null || echo 0)
+STATUS=\$(systemctl is-active \$SERVICENAME)
+STATUS_DETAIL=\$(systemctl status \$SERVICENAME --no-pager | head -30)
 
-REBOOT_INTERVAL_HOURS=12
-
-STATUS_OK=true
-
-# Check if reboot-required present
+# Check if system requires reboot
 if [ -f /var/run/reboot-required ]; then
-  LAST_REBOOT=\$(cat \$LAST_REBOOT_FILE 2>/dev/null || echo 0)
-  NOW_EPOCH=\$(date +%s)
-  INTERVAL_SEC=\$((REBOOT_INTERVAL_HOURS * 3600))
-  if [ \$((NOW_EPOCH - LAST_REBOOT)) -ge \$INTERVAL_SEC ]; then
-    echo "\$TIME 🔁 /var/run/reboot-required found and 12h passed, rebooting..." >> \$LOGFILE
-    date +%s > \$LAST_REBOOT_FILE
-    reboot
-  fi
-fi
-
-if [ \$((CYCLE % 2)) -eq 0 ]; then
-  # healthcheck cycle
-  if ! nc -z -w3 $TUNNEL_HOST $TUNNEL_PORT; then
-    echo "\$TIME ❌ TCP failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-    STATUS_OK=false
-  fi
-
-  if ! ping -c1 -W1 $TUNNEL_HOST >/dev/null; then
-    echo "\$TIME ⚠️ Ping failed to $TUNNEL_HOST" >> \$LOGFILE
-    STATUS_OK=false
-  fi
-
-  if ! \$STATUS_OK; then
-    echo "\$TIME 🔄 Restarting \$SERVICENAME (failure count=\$COUNT)" >> \$LOGFILE
-    systemctl restart \$SERVICENAME
-    COUNT=\$((COUNT+1))
-  else
-    COUNT=0
-    echo "\$TIME ✅ TCP+Ping passed for $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-  fi
-
-else
-  # logcheck cycle
-  if journalctl -u \$SERVICENAME --since "3 minutes ago" | grep -q -E '(closed|shutting down|inactive)'; then
-    echo "\$TIME ⚠️ Log issue detected" >> \$LOGFILE
-    systemctl restart \$SERVICENAME
-    COUNT=\$((COUNT+1))
-  else
-    echo "\$TIME ✅ Log check clean" >> \$LOGFILE
-  fi
-fi
-
-CYCLE=\$((CYCLE+1))
-
-echo \$COUNT > \$RESTART_FILE
-echo \$CYCLE > \$CYCLE_FILE
-
-if [ \$COUNT -ge 3 ]; then
-  echo "\$TIME 🔁 3 failures detected, rebooting server..." >> \$LOGFILE
+  echo "\$CHECKTIME 🔁 /var/run/reboot-required found. Rebooting now..." >> \$LOGFILE
+  sleep 5
   reboot
 fi
 
-tail -n 50 \$LOGFILE > \$LOGFILE.tmp && mv \$LOGFILE.tmp \$LOGFILE
+PING_OK=false
+if ping -c1 -W1 \$TUNNEL_HOST >/dev/null; then
+  PING_OK=true
+fi
+
+journalctl -u \$SERVICENAME --since "\$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > \$TMP_LOG
+
+if [ "\$STATUS" != "active" ]; then
+  echo "\$CHECKTIME ❌ \$SERVICENAME is DOWN! Restarting..." >> \$LOGFILE
+  systemctl restart \$SERVICENAME
+elif [ "\$PING_OK" = true ]; then
+  if [ -s \$TMP_LOG ]; then
+    echo "\$CHECKTIME ⚠️ Log error detected after successful ping" >> \$LOGFILE
+    cat \$TMP_LOG >> \$LOGFILE
+    echo "\$CHECKTIME ❗ Restarting due to log issue..." >> \$LOGFILE
+    systemctl restart \$SERVICENAME
+  else
+    echo "\$CHECKTIME ✅ Ping OK, log clean, service healthy" >> \$LOGFILE
+  fi
+else
+  echo "\$CHECKTIME ❌ Ping failed to \$TUNNEL_HOST. Restarting \$SERVICENAME..." >> \$LOGFILE
+  systemctl restart \$SERVICENAME
+fi
+
+echo "---- [ \$CHECKTIME : systemctl status \$SERVICENAME ] ----" > /var/log/backhaul_status_last.log
+echo "\$STATUS_DETAIL" >> /var/log/backhaul_status_last.log
+
+rm -f \$TMP_LOG
+
+if [ -f "\$LOGFILE" ]; then
+  tail -n 50 "\$LOGFILE" > "\$LOGFILE.tmp" && mv "\$LOGFILE.tmp" "\$LOGFILE"
+fi
+tail -n 35 /var/log/backhaul_status_last.log > /var/log/backhaul_status_last.log.tmp && mv /var/log/backhaul_status_last.log.tmp /var/log/backhaul_status_last.log
 EOM
 
 chmod +x /root/backhaul_monitor.sh
@@ -352,8 +319,9 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now backhaul-monitor.timer
-echo "✅ Monitoring configured for $TUNNEL_HOST:$TUNNEL_PORT every $MON_MIN minutes."
+echo "✅ Monitoring configured for \$TUNNEL_HOST:\$TUNNEL_PORT every \$MON_MIN minutes."
 }
+
 
 while true; do
     show_menu
