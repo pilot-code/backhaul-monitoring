@@ -126,7 +126,7 @@ EOF
 
     cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.timer > /dev/null
 [Unit]
-Description=Run Backhaul Health Check every $MON_MIN minutes
+Description=Run Backhaul Health Check every ${MON_MIN} minutes
 
 [Timer]
 OnBootSec=2min
@@ -140,6 +140,7 @@ EOF
     sudo systemctl daemon-reload
     sudo systemctl enable --now backhaul-monitor.timer
 }
+
 
 while true; do
     show_menu
