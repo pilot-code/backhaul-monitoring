@@ -235,23 +235,20 @@ install_monitoring() {
     MON_MIN=${MON_MIN:-2}
 
     echo "Aya in server Iran ast ya Kharej?"
-    select srv_type in "Iran" "Kharej"; do
-      case $REPLY in
-        1)
-          TUNNEL_HOST="127.0.0.1"
-          read -p "Port tunnel (misal: 3080): " TUNNEL_PORT
-          break
-          ;;
-        2)
-          read -p "IP server Iran: " TUNNEL_HOST
-          read -p "Port tunnel: " TUNNEL_PORT
-          break
-          ;;
-        *)
-          echo "Lotfan adad sahih vared konid."
-          ;;
-      esac
-    done
+    echo "1) Iran"
+    echo "2) Kharej"
+    read -p "Entekhab kon (1 ya 2): " choice
+
+    if [ "$choice" = "1" ]; then
+      TUNNEL_HOST="127.0.0.1"
+      read -p "Port tunnel: " TUNNEL_PORT
+    elif [ "$choice" = "2" ]; then
+      read -p "IP server Iran: " TUNNEL_HOST
+      read -p "Port tunnel: " TUNNEL_PORT
+    else
+      echo "Adad sahih vared konid!"
+      exit 1
+    fi
 
 cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
@@ -337,7 +334,6 @@ systemctl daemon-reload
 systemctl enable --now backhaul-monitor.timer
 echo "✅ Monitoring configured for \$TUNNEL_HOST:\$TUNNEL_PORT every \$MON_MIN minutes."
 }
-
 
 while true; do
     show_menu
