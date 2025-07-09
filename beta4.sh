@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 set -e
@@ -37,16 +36,8 @@ check_service_status() {
     fi
     echo
 }
-
 install_backhaul() {
     local SRV_TYPE="$1"
-
-    # Install required tools
-    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-        echo "Installing required tools (curl, tar)..."
-        sudo apt-get update && sudo apt-get install -y curl tar
-    fi
-
     sudo timedatectl set-timezone UTC
 
     ARCH=$(uname -m)
@@ -125,22 +116,10 @@ ports = [
             done
             read -p "Tunneling ports (comma separated, e.g. 8880,8080,2086,80): " PORTS_RAW
             PORTS=$(echo "$PORTS_RAW" | tr -d ' ' | sed 's/,/","/g')
-            read -p "Do you already have SSL cert & key? (y/n): " SSL_HAS
-            if [[ "$SSL_HAS" =~ ^[Yy]$ ]]; then
-                read -p "Enter path to SSL certificate file (ex: /root/server.crt): " SSL_CERT
-                read -p "Enter path to SSL key file (ex: /root/server.key): " SSL_KEY
-                echo "SSL cert: $SSL_CERT"
-                echo "SSL key: $SSL_KEY"
-            else
-                echo "Installing openssl and generating SSL certificate..."
-                sudo apt-get update && sudo apt-get install -y openssl
-                openssl genpkey -algorithm RSA -out /root/server.key -pkeyopt rsa_keygen_bits:2048
-                openssl req -new -key /root/server.key -out /root/server.csr
-                openssl x509 -req -in /root/server.csr -signkey /root/server.key -out /root/server.crt -days 365
-                SSL_CERT="/root/server.crt"
-                SSL_KEY="/root/server.key"
-                echo "SSL cert and key sakhte shod: $SSL_CERT & $SSL_KEY"
-            fi
+
+            SSL_CERT="/root/server.crt"
+            SSL_KEY="/root/server.key"
+            
             BACKHAUL_CONFIG="[server]
 bind_addr = \"0.0.0.0:$TUNNEL_PORT\"
 transport = \"wssmux\"
@@ -165,12 +144,11 @@ ports = [
 ]"
         fi
     else
-        if [ "$TUNNEL_TYPE" = "tcp" ]; then
-            read -p "Iran server IP: " IRAN_IP
-            read -p "Tunnel port (ex: 3080): " TUNNEL_PORT
-            BACKHAUL_CONFIG="[client]
+        read -p "Iran server IP: " IRAN_IP
+        read -p "Tunnel port (ex: 3080): " TUNNEL_PORT
+        BACKHAUL_CONFIG="[client]
 remote_addr = \"$IRAN_IP:$TUNNEL_PORT\"
-transport = \"tcp\"
+transport = \"$TUNNEL_TYPE\"
 token = \"$BKTOKEN\"
 connection_pool = 8
 aggressive_pool = false
@@ -182,36 +160,6 @@ sniffer = true
 web_port = 2060
 sniffer_log = \"/root/backhaul.json\"
 log_level = \"info\""
-        else
-            read -p "Iran server IP: " IRAN_IP
-            while true; do
-                read -p "Tunnel port for WSS Mux (only 443 or 8443): " TUNNEL_PORT
-                if [[ "$TUNNEL_PORT" == "443" || "$TUNNEL_PORT" == "8443" ]]; then
-                    break
-                else
-                    echo "Faghat mituni 443 ya 8443 entekhab koni!"
-                fi
-            done
-            BACKHAUL_CONFIG="[client]
-remote_addr = \"$IRAN_IP:$TUNNEL_PORT\"
-edge_ip = \"\"
-transport = \"wssmux\"
-token = \"$BKTOKEN\"
-keepalive_period = 75
-dial_timeout = 10
-nodelay = true
-retry_interval = 3
-connection_pool = 8
-aggressive_pool = false
-mux_version = 1
-mux_framesize = 32768
-mux_recievebuffer = 4194304
-mux_streambuffer = 65536
-sniffer = true
-web_port = 2060
-sniffer_log = \"/root/backhaul.json\"
-log_level = \"info\""
-        fi
     fi
 
     echo "$BACKHAUL_CONFIG" > /root/backhaul/config.toml
@@ -238,145 +186,88 @@ EOF
     sudo systemctl restart backhaul.service
 }
 
+
 install_monitoring() {
     echo "---------------------------------------------------"
     read -p "Har chand daghighe monitoring check beshe? (default: 2): " MON_MIN
     MON_MIN=${MON_MIN:-2}
 
-cat <<'EOM' > /root/backhaul_monitor.sh
+    read -p "Enter tunnel host (e.g. 127.0.0.1): " TUNNEL_HOST
+    read -p "Enter tunnel port (e.g. 3080): " TUNNEL_PORT
+
+cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
-
 LOGFILE="/var/log/backhaul_monitor.log"
-SERVICENAME="backhaul.service"
 TMP_LOG="/tmp/backhaul_monitor_tmp.log"
+SERVICENAME="backhaul.service"
+TIME=\$(date '+%Y-%m-%d %H:%M:%S')
 RESTART_COUNT_FILE="/tmp/backhaul_restart_count"
-CONFIG_FILE="/root/backhaul/config.toml"
-MAX_RESTARTS=3
 
-# Install required tools if not present
-if ! command -v nc >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    apt-get update && apt-get install -y netcat-openbsd openssl curl
-fi
-
-# Read config to get tunnel details
-TUNNEL_PORT=$(grep "bind_addr\|remote_addr" $CONFIG_FILE | grep -oE ":[0-9]+" | cut -d: -f2)
-TRANSPORT=$(grep "transport" $CONFIG_FILE | grep -oE "tcp|wssmux")
-REMOTE_IP=$(grep "remote_addr" $CONFIG_FILE | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+")
-WEB_PORT=$(grep "web_port" $CONFIG_FILE | grep -oE "[0-9]+")
-
-# If no remote IP (server mode), use localhost for some checks
-if [ -z "$REMOTE_IP" ]; then
-    REMOTE_IP="127.0.0.1"
-fi
-
-CHECKTIME=$(date '+%Y-%m-%d %H:%M:%S')
-STATUS=$(systemctl is-active $SERVICENAME)
-STATUS_DETAIL=$(systemctl status $SERVICENAME --no-pager | head -30)
-
-# Initialize restart count
-if [ ! -f "$RESTART_COUNT_FILE" ]; then
-    echo "0" > "$RESTART_COUNT_FILE"
-fi
-RESTART_COUNT=$(cat "$RESTART_COUNT_FILE")
-
-# Function to log and rotate logs
-log_and_rotate() {
-    echo "$1" >> "$LOGFILE"
-    if [ -f "$LOGFILE" ]; then
-        tail -n 100 "$LOGFILE" > "$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
-    fi
-    tail -n 35 /var/log/backhaul_status_last.log > /var/log/backhaul_status_last.log.tmp && mv /var/log/backhaul_status_last.log.tmp /var/log/backhaul_status_last.log
+check_tcp() {
+  if nc -z -w3 $TUNNEL_HOST $TUNNEL_PORT; then
+    echo "\$TIME ✅ TCP port $TUNNEL_PORT on $TUNNEL_HOST is open" >> \$LOGFILE
+    echo "0" > \$RESTART_COUNT_FILE
+  else
+    echo "\$TIME ❌ TCP port $TUNNEL_PORT on $TUNNEL_HOST is CLOSED." >> \$LOGFILE
+    restart_service
+  fi
 }
 
-# Function to restart service
+check_ping() {
+  ping -c 1 -W 1 $TUNNEL_HOST >/dev/null && echo "\$TIME 📶 Ping OK" >> \$LOGFILE || echo "\$TIME ⚠️ Ping failed" >> \$LOGFILE
+}
+
+check_http() {
+  curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT >/dev/null && echo "\$TIME 🌐 HTTP OK" >> \$LOGFILE || echo "\$TIME 🚫 HTTP failed" >> \$LOGFILE
+}
+
+check_tls() {
+  echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol' && echo "\$TIME 🔐 TLS OK" >> \$LOGFILE || echo "\$TIME ❌ TLS failed" >> \$LOGFILE
+}
+
+check_logs() {
+  journalctl -u \$SERVICENAME --since "5 minutes ago" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > \$TMP_LOG
+  if [ -s \$TMP_LOG ]; then
+    echo "\$TIME ⚠️ Log issue detected" >> \$LOGFILE
+    restart_service
+  fi
+  rm -f \$TMP_LOG
+}
+
 restart_service() {
-    log_and_rotate "$CHECKTIME ❗ Trying to restart $SERVICENAME..."
-    if systemctl restart $SERVICENAME; then
-        log_and_rotate "$CHECKTIME 🔄 Restart command successful."
-        sleep 1
-        NEW_STATUS=$(systemctl is-active $SERVICENAME)
-        log_and_rotate "$CHECKTIME 🟢 Status after restart: $NEW_STATUS"
-        RESTART_COUNT=$((RESTART_COUNT + 1))
-        echo "$RESTART_COUNT" > "$RESTART_COUNT_FILE"
-        return 0
-    else
-        log_and_rotate "$CHECKTIME 🚫 ERROR: Restart command FAILED!"
-        return 1
-    fi
+  COUNT=\$(cat \$RESTART_COUNT_FILE 2>/dev/null || echo "0")
+  COUNT=\$((COUNT+1))
+  echo "\$TIME 🔄 Restarting \$SERVICENAME (attempt \$COUNT)..." >> \$LOGFILE
+  systemctl restart \$SERVICENAME
+  echo "\$COUNT" > \$RESTART_COUNT_FILE
+
+  if [ \$COUNT -ge 3 ]; then
+    echo "\$TIME 🔁 Max restart attempts reached. Rebooting server..." >> \$LOGFILE
+    sleep 3
+    reboot
+  fi
 }
 
-# Function to reboot server
-reboot_server() {
-    log_and_rotate "$CHECKTIME 🚨 Max restarts reached ($MAX_RESTARTS). Rebooting server..."
-    echo "0" > "$RESTART_COUNT_FILE"
-    systemctl reboot
-}
+check_tcp
+check_ping
+check_http
+check_tls
 
-# Tunnel health checks
-HEALTHY=true
-CHECK_DETAILS=""
-
-# 1. Ping check
-if ! ping -c 2 -W 2 "$REMOTE_IP" > /dev/null 2>&1; then
-    HEALTHY=false
-    CHECK_DETAILS="$CHECK_DETAILS\n$CHECKTIME ❌ Ping to $REMOTE_IP failed."
+CYCLE_COUNT_FILE="/tmp/cycle_count"
+CYCLE_COUNT=\$(cat \$CYCLE_COUNT_FILE 2>/dev/null || echo "0")
+CYCLE_COUNT=\$((CYCLE_COUNT+1))
+if [ \$CYCLE_COUNT -ge 3 ]; then
+  check_logs
+  CYCLE_COUNT=0
 fi
+echo "\$CYCLE_COUNT" > \$CYCLE_COUNT_FILE
 
-# 2. TCP socket check
-if ! nc -z -w 3 "$REMOTE_IP" "$TUNNEL_PORT" > /dev/null 2>&1; then
-    HEALTHY=false
-    CHECK_DETAILS="$CHECK_DETAILS\n$CHECKTIME ❌ TCP socket check failed on $REMOTE_IP:$TUNNEL_PORT."
+if [ -f "\$LOGFILE" ]; then
+    tail -n 100 "\$LOGFILE" > "\$LOGFILE.tmp" && mv "\$LOGFILE.tmp" "\$LOGFILE"
 fi
-
-# 3. TLS handshake check (only for wssmux)
-if [ "$TRANSPORT" = "wssmux" ]; then
-    if ! echo | openssl s_client -connect "$REMOTE_IP:$TUNNEL_PORT" -quiet 2>/dev/null; then
-        HEALTHY=false
-        CHECK_DETAILS="$CHECK_DETAILS\n$CHECKTIME ❌ TLS handshake failed on $REMOTE_IP:$TUNNEL_PORT."
-    fi
-fi
-
-# 4. HTTP response check (if web_port exists)
-if [ -n "$WEB_PORT" ]; then
-    if ! curl -s -m 3 "http://$REMOTE_IP:$WEB_PORT" > /dev/null; then
-        HEALTHY=false
-        CHECK_DETAILS="$CHECK_DETAILS\n$CHECKTIME ❌ HTTP check failed on http://$REMOTE_IP:$WEB_PORT."
-    fi
-fi
-
-# 5. Log check (only if other checks failed or service is down)
-if [ "$STATUS" != "active" ] || [ "$HEALTHY" = false ]; then
-    LAST_CHECK=$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
-    journalctl -u $SERVICENAME --since "$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > $TMP_LOG
-    if [ -s $TMP_LOG ]; then
-        CHECK_DETAILS="$CHECK_DETAILS\n$CHECKTIME ⚠️ Issue detected in recent log:"
-        CHECK_DETAILS="$CHECK_DETAILS\n$(cat $TMP_LOG)"
-    fi
-fi
-
-# Handle results
-if [ "$STATUS" != "active" ] || [ "$HEALTHY" = false ]; then
-    log_and_rotate "$CHECKTIME ❌ $SERVICENAME is DOWN or tunnel unhealthy! [status: $STATUS]"
-    log_and_rotate "$CHECK_DETAILS"
-    
-    if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS" ]; then
-        reboot_server
-    else
-        restart_service
-    fi
-else
-    log_and_rotate "$CHECKTIME ✅ Backhaul healthy. [status: $STATUS]"
-    echo "0" > "$RESTART_COUNT_FILE" # Reset restart count on healthy status
-fi
-
-# Update status log
-echo "---- [ $CHECKTIME : systemctl status $SERVICENAME ] ----" > /var/log/backhaul_status_last.log
-echo "$STATUS_DETAIL" >> /var/log/backhaul_status_last.log
-
-rm -f $TMP_LOG
 EOM
 
-    chmod +x /root/backhaul_monitor.sh
+chmod +x /root/backhaul_monitor.sh
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.service > /dev/null
 [Unit]
@@ -401,14 +292,14 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    sudo systemctl daemon-reexec
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now backhaul-monitor.timer
-    sudo systemctl restart backhaul-monitor.timer
-    sudo systemctl restart backhaul-monitor.service
-    sudo journalctl --rotate
-    sudo journalctl --vacuum-time=1s
-    echo "" > /var/log/backhaul_monitor.log
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable --now backhaul-monitor.timer
+sudo systemctl restart backhaul-monitor.timer
+sudo systemctl restart backhaul-monitor.service
+sudo journalctl --rotate
+sudo journalctl --vacuum-time=1s
+echo "" > /var/log/backhaul_monitor.log
 }
 
 while true; do
@@ -443,4 +334,3 @@ while true; do
             echo "Option not recognized! Try again." ;;
     esac
 done
-```
