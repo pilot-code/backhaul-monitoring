@@ -31,7 +31,8 @@
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/pilot-code/backhaul-monitoring/main/install2.sh)
 ```
-ورژن دوم (با ورژن قبلی سازگاری ندارد / پیشنهادی / قابلیت مالتی سرویس و مالتی سرور)
+ورژن دوم  بررسی ping به مقصد
+  - بررسی لاگ‌های بک‌هال برای خطاهای مهم کامل ترین نسخه 
 
 ```
 bash <(curl -Ls https://raw.githubusercontent.com/pilot-code/backhaul-monitoring/main/final.sh)
