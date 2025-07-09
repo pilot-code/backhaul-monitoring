@@ -103,9 +103,11 @@ cat <<EOM > /root/backhaul_monitor.sh
 LOGFILE="/var/log/backhaul_monitor.log"
 SERVICENAME="backhaul.service"
 RESTART_FILE="/tmp/backhaul_restart_count"
+CYCLE_FILE="/tmp/backhaul_cycle_count"
 TIME=\$(date '+%Y-%m-%d %H:%M:%S')
 
 COUNT=\$(cat \$RESTART_FILE 2>/dev/null || echo 0)
+CYCLE=\$(cat \$CYCLE_FILE 2>/dev/null || echo 0)
 
 STATUS_OK=true
 
@@ -128,20 +130,25 @@ else
   echo "\$TIME ✅ TCP+Ping passed for $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
 fi
 
+CYCLE=\$((CYCLE+1))
+if [ \$CYCLE -ge 3 ]; then
+  journalctl -u \$SERVICENAME --since \"${LOG_CHECK_MIN} minutes ago\" | grep -q -E '(closed|shutting down|inactive)' && {
+    echo "\$TIME ⚠️ Log issue detected" >> \$LOGFILE
+    systemctl restart \$SERVICENAME
+    COUNT=\$((COUNT+1))
+  }
+  CYCLE=0
+fi
+
 echo \$COUNT > \$RESTART_FILE
+echo \$CYCLE > \$CYCLE_FILE
 
 if [ \$COUNT -ge 3 ]; then
   echo "\$TIME 🔁 3 failures detected, rebooting..." >> \$LOGFILE
   reboot
 fi
 
-LAST_LOG_CHECK=\$(date --date=\"${LOG_CHECK_MIN} minutes ago\" '+%Y-%m-%d %H:%M')
-if journalctl -u \$SERVICENAME --since \"\$LAST_LOG_CHECK\" | grep -q -E '(closed|shutting down|inactive)'; then
-  echo "\$TIME ⚠️ Log issue detected in past ${LOG_CHECK_MIN} minutes" >> \$LOGFILE
-  systemctl restart \$SERVICENAME
-fi
-
-tail -n 100 \$LOGFILE > \$LOGFILE.tmp && mv \$LOGFILE.tmp \$LOGFILE
+tail -n 50 \$LOGFILE > \$LOGFILE.tmp && mv \$LOGFILE.tmp \$LOGFILE
 EOM
 
 chmod +x /root/backhaul_monitor.sh
@@ -173,11 +180,37 @@ systemctl enable --now backhaul-monitor.timer
 echo "✅ Monitoring configured for $TUNNEL_HOST:$TUNNEL_PORT every $MON_MIN minutes (log check every ${LOG_CHECK_MIN} min)"
 }
 
+uninstall() {
+    echo "🔴 Uninstalling Backhaul and Monitoring completely..."
+    systemctl stop backhaul.service 2>/dev/null || true
+    systemctl disable backhaul.service 2>/dev/null || true
+    rm -f /etc/systemd/system/backhaul.service
+
+    systemctl stop backhaul-monitor.timer 2>/dev/null || true
+    systemctl disable backhaul-monitor.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/backhaul-monitor.timer
+    rm -f /etc/systemd/system/backhaul-monitor.service
+
+    systemctl daemon-reload
+
+    rm -rf /root/backhaul
+    rm -f /root/backhaul_monitor.sh
+    rm -f /var/log/backhaul_monitor.log
+    rm -f /var/log/backhaul_status_last.log
+    rm -f /tmp/backhaul_restart_count
+    rm -f /tmp/backhaul_cycle_count
+
+    echo "✅ Uninstall complete. All services, timers and files removed."
+}
+
 show_menu() {
     echo "==== BACKHAUL TOOL MENU ===="
     echo "1) Install Iran Server + Monitoring"
     echo "2) Install Foreign Server + Monitoring"
     echo "3) Install Only Monitoring"
+    echo "4) View Monitoring Log (last 30 lines)"
+    echo "5) View Backhaul Service Status"
+    echo "6) Uninstall All"
     echo "0) Exit"
     echo "----------------------------"
     echo -n "Select an option: "
@@ -187,21 +220,13 @@ while true; do
     show_menu
     read -r opt
     case "$opt" in
-        1)
-            install_backhaul server
-            install_monitoring
-            ;;
-        2)
-            install_backhaul client
-            install_monitoring
-            ;;
-        3)
-            install_monitoring
-            ;;
-        0)
-            exit 0
-            ;;
-        *)
-            echo "Invalid option, try again." ;;
+        1) install_backhaul server; install_monitoring ;;
+        2) install_backhaul client; install_monitoring ;;
+        3) install_monitoring ;;
+        4) tail -n 30 /var/log/backhaul_monitor.log || echo "No monitoring log yet." ;;
+        5) systemctl status backhaul.service --no-pager | head -30 ;;
+        6) uninstall ;;
+        0) exit 0 ;;
+        *) echo "Invalid option, try again." ;;
     esac
 done
