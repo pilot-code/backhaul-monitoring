@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 
 set -e
@@ -39,6 +40,13 @@ check_service_status() {
 
 install_backhaul() {
     local SRV_TYPE="$1"
+
+    # Install required tools
+    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        echo "Installing required tools (curl, tar)..."
+        sudo apt-get update && sudo apt-get install -y curl tar
+    fi
+
     sudo timedatectl set-timezone UTC
 
     ARCH=$(uname -m)
@@ -435,3 +443,4 @@ while true; do
             echo "Option not recognized! Try again." ;;
     esac
 done
+```
