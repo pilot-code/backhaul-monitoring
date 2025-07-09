@@ -234,8 +234,24 @@ install_monitoring() {
     read -p "Har chand daghighe monitoring check beshe? (default: 2): " MON_MIN
     MON_MIN=${MON_MIN:-2}
 
-    read -p "IP ya hostname server moghabel: " TUNNEL_HOST
-    read -p "Port tunnel server moghabel: " TUNNEL_PORT
+    echo "Aya in server Iran ast ya Kharej?"
+    select srv_type in "Iran" "Kharej"; do
+      case $REPLY in
+        1)
+          TUNNEL_HOST="127.0.0.1"
+          read -p "Port tunnel (misal: 3080): " TUNNEL_PORT
+          break
+          ;;
+        2)
+          read -p "IP server Iran: " TUNNEL_HOST
+          read -p "Port tunnel: " TUNNEL_PORT
+          break
+          ;;
+        *)
+          echo "Lotfan adad sahih vared konid."
+          ;;
+      esac
+    done
 
 cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
