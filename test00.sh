@@ -85,24 +85,8 @@ install_monitoring() {
     read -p "Har chand daghighe monitoring check beshe? (default: 2): " MON_MIN
     MON_MIN=${MON_MIN:-2}
 
-    echo "Aya in server Iran ast ya Kharej?"
-    select srv_type in "Iran" "Kharej"; do
-      case $REPLY in
-        1)
-          read -p "Port tunnel dar server Iran: " TUNNEL_PORT
-          TUNNEL_HOST="127.0.0.1"
-          break
-          ;;
-        2)
-          read -p "IP server Iran: " TUNNEL_HOST
-          read -p "Port tunnel: " TUNNEL_PORT
-          break
-          ;;
-        *)
-          echo "Lotfan adad sahih vared konid."
-          ;;
-      esac
-    done
+    read -p "IP ya Hostname ke bayad check beshe (misal: 37.191.93.232 ya 38.180.144.24 ya 127.0.0.1): " TUNNEL_HOST
+    read -p "Port tunnel (misal: 3080): " TUNNEL_PORT
 
 cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
@@ -127,23 +111,13 @@ if ! ping -c1 -W1 $TUNNEL_HOST >/dev/null; then
   STATUS_OK=false
 fi
 
-if ! curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT >/dev/null; then
-  echo "\$TIME 🚫 HTTP failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-  STATUS_OK=false
-fi
-
-if ! echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol'; then
-  echo "\$TIME 🔒 TLS handshake failed to $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-  STATUS_OK=false
-fi
-
 if ! \$STATUS_OK; then
   echo "\$TIME 🔄 Restarting \$SERVICENAME (failure count=\$COUNT)" >> \$LOGFILE
   systemctl restart \$SERVICENAME
   COUNT=\$((COUNT+1))
 else
   COUNT=0
-  echo "\$TIME ✅ All checks passed for $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
+  echo "\$TIME ✅ TCP+Ping passed for $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
 fi
 
 CYCLE=\$((CYCLE+1))
@@ -167,7 +141,7 @@ fi
 tail -n 100 \$LOGFILE > \$LOGFILE.tmp && mv \$LOGFILE.tmp \$LOGFILE
 EOM
 
-    chmod +x /root/backhaul_monitor.sh
+chmod +x /root/backhaul_monitor.sh
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.service > /dev/null
 [Unit]
@@ -191,9 +165,9 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now backhaul-monitor.timer
-    echo "✅ Monitoring setup complete for $TUNNEL_HOST:$TUNNEL_PORT"
+sudo systemctl daemon-reload
+sudo systemctl enable --now backhaul-monitor.timer
+echo "✅ Monitoring setup complete for $TUNNEL_HOST:$TUNNEL_PORT"
 }
 
 
