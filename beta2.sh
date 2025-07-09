@@ -48,14 +48,18 @@ install_monitoring() {
 cat <<EOM > /root/backhaul_monitor.sh
 #!/bin/bash
 LOGFILE="/var/log/backhaul_monitor.log"
+TMP_LOG="/tmp/backhaul_monitor_tmp.log"
+SERVICENAME="backhaul.service"
 TIME=\$(date '+%Y-%m-%d %H:%M:%S')
+RESTART_COUNT_FILE="/tmp/backhaul_restart_count"
 
 check_tcp() {
   if nc -z -w3 $TUNNEL_HOST $TUNNEL_PORT; then
     echo "\$TIME ✅ TCP port $TUNNEL_PORT on $TUNNEL_HOST is open" >> \$LOGFILE
+    echo "0" > \$RESTART_COUNT_FILE
   else
-    echo "\$TIME ❌ TCP port $TUNNEL_PORT on $TUNNEL_HOST is CLOSED. Restarting..." >> \$LOGFILE
-    systemctl restart backhaul.service
+    echo "\$TIME ❌ TCP port $TUNNEL_PORT on $TUNNEL_HOST is CLOSED." >> \$LOGFILE
+    restart_service
   fi
 }
 
@@ -68,18 +72,33 @@ check_ping() {
 }
 
 check_http() {
-  if curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT > /dev/null; then
-    echo "\$TIME 🌐 HTTP response from $TUNNEL_HOST:$TUNNEL_PORT OK" >> \$LOGFILE
-  else
-    echo "\$TIME 🚫 No HTTP response from $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-  fi
+  curl -s --connect-timeout 3 http://$TUNNEL_HOST:$TUNNEL_PORT > /dev/null && echo "\$TIME 🌐 HTTP response OK" >> \$LOGFILE || echo "\$TIME 🚫 No HTTP response" >> \$LOGFILE
 }
 
 check_tls() {
-  if echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol'; then
-    echo "\$TIME 🔐 TLS handshake successful with $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
-  else
-    echo "\$TIME ❌ TLS handshake FAILED with $TUNNEL_HOST:$TUNNEL_PORT" >> \$LOGFILE
+  echo | openssl s_client -connect $TUNNEL_HOST:$TUNNEL_PORT -servername $TUNNEL_HOST -brief 2>/dev/null | grep -q 'Protocol' && echo "\$TIME 🔐 TLS handshake OK" >> \$LOGFILE || echo "\$TIME ❌ TLS handshake FAILED" >> \$LOGFILE
+}
+
+check_logs() {
+  journalctl -u \$SERVICENAME --since "5 minutes ago" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > \$TMP_LOG
+  if [ -s \$TMP_LOG ]; then
+    echo "\$TIME ⚠️ Issues detected in logs" >> \$LOGFILE
+    restart_service
+  fi
+  rm -f \$TMP_LOG
+}
+
+restart_service() {
+  COUNT=\$(cat \$RESTART_COUNT_FILE 2>/dev/null || echo "0")
+  COUNT=\$((COUNT+1))
+  echo "\$TIME 🔄 Restarting \$SERVICENAME (attempt \$COUNT)..." >> \$LOGFILE
+  systemctl restart \$SERVICENAME
+  echo "\$COUNT" > \$RESTART_COUNT_FILE
+
+  if [ \$COUNT -ge 3 ]; then
+    echo "\$TIME 🔁 Maximum restart attempts reached. Rebooting server..." >> \$LOGFILE
+    sleep 3
+    reboot
   fi
 }
 
@@ -88,13 +107,23 @@ check_ping
 check_http
 check_tls
 
-# Keep log limited
+# Check logs every 3 cycles
+CYCLE_COUNT_FILE="/tmp/cycle_count"
+CYCLE_COUNT=\$(cat \$CYCLE_COUNT_FILE 2>/dev/null || echo "0")
+CYCLE_COUNT=\$((CYCLE_COUNT+1))
+if [ \$CYCLE_COUNT -ge 3 ]; then
+  check_logs
+  CYCLE_COUNT=0
+fi
+echo "\$CYCLE_COUNT" > \$CYCLE_COUNT_FILE
+
+# Limit log file size
 if [ -f "\$LOGFILE" ]; then
     tail -n 100 "\$LOGFILE" > "\$LOGFILE.tmp" && mv "\$LOGFILE.tmp" "\$LOGFILE"
 fi
 EOM
 
-    chmod +x /root/backhaul_monitor.sh
+chmod +x /root/backhaul_monitor.sh
 
 cat <<EOF | sudo tee /etc/systemd/system/backhaul-monitor.service > /dev/null
 [Unit]
@@ -119,14 +148,14 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    sudo systemctl daemon-reexec
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now backhaul-monitor.timer
-    sudo systemctl restart backhaul-monitor.timer
-    sudo systemctl restart backhaul-monitor.service
-    sudo journalctl --rotate
-    sudo journalctl --vacuum-time=1s
-    echo "" > /var/log/backhaul_monitor.log
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable --now backhaul-monitor.timer
+sudo systemctl restart backhaul-monitor.timer
+sudo systemctl restart backhaul-monitor.service
+sudo journalctl --rotate
+sudo journalctl --vacuum-time=1s
+echo "" > /var/log/backhaul_monitor.log
 }
 
 while true; do
