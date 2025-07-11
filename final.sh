@@ -259,9 +259,10 @@ TMP_LOG="/tmp/backhaul_monitor_tmp.log"
 CHECKTIME=\$(date '+%Y-%m-%d %H:%M:%S')
 TUNNEL_HOST="$TUNNEL_HOST"
 TUNNEL_PORT="$TUNNEL_PORT"
+LAST_CHECK=\$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
 
 STATUS=\$(systemctl is-active \$SERVICENAME)
-STATUS_DETAIL=\$(journalctl -u \$SERVICENAME -n 10 --no-pager)
+STATUS_DETAIL=\$(systemctl status \$SERVICENAME --no-pager | head -30)
 
 # Check if system requires reboot
 if [ -f /var/run/reboot-required ]; then
@@ -275,7 +276,7 @@ if ping -c1 -W1 \$TUNNEL_HOST >/dev/null; then
   PING_OK=true
 fi
 
-journalctl -u \$SERVICENAME -S -1min | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > \$TMP_LOG
+journalctl -u \$SERVICENAME --since "\$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > \$TMP_LOG
 
 if [ "\$STATUS" != "active" ]; then
   echo "\$CHECKTIME ❌ \$SERVICENAME is DOWN! Restarting..." >> \$LOGFILE
@@ -334,7 +335,6 @@ systemctl enable --now backhaul-monitor.timer
 echo "✅ Monitoring configured for \$TUNNEL_HOST:\$TUNNEL_PORT every \$MON_MIN minutes."
 }
 
-
 while true; do
     show_menu
     read -r opt
@@ -366,4 +366,4 @@ while true; do
         *)
             echo "Option not recognized! Try again." ;;
     esac
-done
+done 
