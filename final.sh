@@ -259,11 +259,8 @@ TMP_LOG="/tmp/backhaul_monitor_tmp.log"
 CHECKTIME=\$(date '+%Y-%m-%d %H:%M:%S')
 TUNNEL_HOST="$TUNNEL_HOST"
 TUNNEL_PORT="$TUNNEL_PORT"
-LAST_CHECK=$(date --iso-8601=seconds -d "1 minute ago")
+journalctl -u $SERVICENAME -S -1min | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > $TMP_LOG
 
-
-STATUS=\$(systemctl is-active \$SERVICENAME)
-STATUS_DETAIL=$(journalctl -u $SERVICENAME -n 10 --no-pager)
 
 # Check if system requires reboot
 if [ -f /var/run/reboot-required ]; then
