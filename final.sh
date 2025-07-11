@@ -259,7 +259,8 @@ TMP_LOG="/tmp/backhaul_monitor_tmp.log"
 CHECKTIME=\$(date '+%Y-%m-%d %H:%M:%S')
 TUNNEL_HOST="$TUNNEL_HOST"
 TUNNEL_PORT="$TUNNEL_PORT"
-LAST_CHECK=\$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
+LAST_CHECK=$(date --iso-8601=seconds -d "1 minute ago")
+
 
 STATUS=\$(systemctl is-active \$SERVICENAME)
 STATUS_DETAIL=$(journalctl -u $SERVICENAME -n 10 --no-pager)
