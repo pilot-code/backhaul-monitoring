@@ -262,7 +262,7 @@ TUNNEL_PORT="$TUNNEL_PORT"
 LAST_CHECK=\$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
 
 STATUS=\$(systemctl is-active \$SERVICENAME)
-STATUS_DETAIL=\$(systemctl status \$SERVICENAME --no-pager | head -30)
+STATUS_DETAIL=$(journalctl -u $SERVICENAME -n 10 --no-pager)
 
 # Check if system requires reboot
 if [ -f /var/run/reboot-required ]; then
