@@ -245,7 +245,8 @@ TMP_LOG="/tmp/backhaul_monitor_tmp.log"
 CHECKTIME=$(date '+%Y-%m-%d %H:%M:%S')
 STATUS=$(systemctl is-active $SERVICENAME)
 STATUS_DETAIL=$(systemctl status $SERVICENAME --no-pager | head -30)
-LAST_CHECK=$(date --date='1 minute ago' '+%Y-%m-%d %H:%M')
+LAST_CHECK=$(date --iso-8601=seconds -d "1 minute ago")
+
 
 journalctl -u $SERVICENAME --since "$LAST_CHECK:00" | grep -E "(control channel has been closed|shutting down|channel dialer|inactive|dead)" > $TMP_LOG
 
