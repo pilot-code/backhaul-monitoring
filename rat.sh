@@ -1,69 +1,24 @@
 #!/bin/bash
 
-CONFIG_PATH="/root/rathole_watchdog.conf"
+echo "➡️ Installing Rathole Watchdog..."
+
+# مسیر فایل اصلی
+WATCHDOG_PATH="/root/rathole_watchdog.sh"
 SERVICE_FILE="/etc/systemd/system/rathole_watchdog.service"
 LOG_FILE="/var/log/rathole_watchdog.log"
-MODE="$1"
 
-if [ "$MODE" != "run" ]; then
-  clear
-  echo "==== Rathole Watchdog Control ===="
-  echo "1) Install and enable watchdog"
-  echo "2) Restart watchdog"
-  echo "3) Delete watchdog"
-  echo "0) Exit"
-  read -p "Select option: " choice
+# فایل watchdog.sh رو می‌سازه:
+cat <<'EOW' > $WATCHDOG_PATH
+#!/bin/bash
 
-  case "$choice" in
-    1)
-      cat <<EOF | tee "$SERVICE_FILE" > /dev/null
-[Unit]
-Description=Rathole Log Watchdog
-After=network.target
-
-[Service]
-ExecStart=/bin/bash /root/rathole_watchdog.sh run
-Restart=always
-RestartSec=30
-Type=simple
-
-[Install]
-WantedBy=multi-user.target
-EOF
-      systemctl daemon-reload
-      systemctl enable --now rathole_watchdog.service
-      echo "Watchdog installed and running."
-      ;;
-    2)
-      systemctl restart rathole_watchdog.service
-      echo "Watchdog restarted." >> "$LOG_FILE"
-      ;;
-    3)
-      systemctl stop rathole_watchdog.service
-      systemctl disable rathole_watchdog.service
-      rm -f "$SERVICE_FILE"
-      systemctl daemon-reload
-      echo "Watchdog removed." >> "$LOG_FILE"
-      ;;
-    0)
-      exit 0
-      ;;
-    *)
-      echo "Invalid option"
-      exit 1
-      ;;
-  esac
-  exit 0
-fi
-
-# Mode run - Watchdog logic
+LOG_FILE="/var/log/rathole_watchdog.log"
 RESTART_COOLDOWN=300
 LAST_RESTART=0
 
 while true; do
   TIME_NOW=$(date '+%Y-%m-%d %H:%M:%S')
-
   RATHOLE_SERVICE=$(systemctl list-units --type=service | grep -i rathole | grep -v watchdog | awk '{print $1}' | head -n1)
+
   if [ -n "$RATHOLE_SERVICE" ]; then
     ERROR_COUNT=$(journalctl -u "$RATHOLE_SERVICE" -n 5 --no-pager | grep -Ei '(error|failed|unavailable|disconnect)' | wc -l)
 
@@ -74,10 +29,10 @@ while true; do
         systemctl restart "$RATHOLE_SERVICE"
         LAST_RESTART=$CURRENT_TIME
       else
-        echo "$TIME_NOW Cooldown active." >> "$LOG_FILE"
+        echo "$TIME_NOW Cooldown active, waiting..." >> "$LOG_FILE"
       fi
     else
-      echo "$TIME_NOW No critical errors detected in last 5 logs." >> "$LOG_FILE"
+      echo "$TIME_NOW Service healthy (no errors in last 5 logs)" >> "$LOG_FILE"
     fi
   else
     echo "$TIME_NOW Rathole service not found." >> "$LOG_FILE"
@@ -85,3 +40,29 @@ while true; do
 
   sleep 90
 done
+EOW
+
+chmod +x $WATCHDOG_PATH
+
+# فایل سرویس systemd
+cat <<EOF | tee $SERVICE_FILE > /dev/null
+[Unit]
+Description=Rathole Log Watchdog
+After=network.target
+
+[Service]
+ExecStart=/bin/bash $WATCHDOG_PATH run
+Restart=always
+RestartSec=30
+Type=simple
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# فعال‌سازی و استارت
+systemctl daemon-reload
+systemctl enable --now rathole_watchdog.service
+
+echo "✅ Watchdog installed, enabled and running."
+echo "🔎 Logs: tail -f /var/log/rathole_watchdog.log"
